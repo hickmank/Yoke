@@ -27,6 +27,7 @@ dependencies = [
     "torchaudio",
     "pytest-cov",
     "coveralls",
+    "sphinx",
     "scikit-image",
     "matplotlib",
     "h5py",
