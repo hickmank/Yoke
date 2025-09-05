@@ -3,13 +3,13 @@
 --FILELIST_DIR
 /usr/projects/artimis/mpmm/hickmank/policy_yoke/applications/filelists/
 --LSC_NPZ_DIR
-/lustre/scratch4/exempt/artimis/lsc240420/
+/lustre/scratch5/exempt/artimis/data/lsc240420/
 --train_filelist
 lsc240420_train_80pct.txt
 --validation_filelist
 lsc240420_val_10pct.txt
 --LSC_DESIGN_DIR
-/lustre/scratch4/exempt/artimis/
+/lustre/scratch5/exempt/artimis/data/
 --design_file
 design_lsc240420_MASTER.csv
 --trn_rcrd_filename
