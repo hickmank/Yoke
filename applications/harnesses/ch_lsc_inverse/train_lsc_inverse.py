@@ -26,7 +26,7 @@ descr_str = (
     "Uses DDP to train parameter-estimation CNN."
 )
 parser = argparse.ArgumentParser(
-    prog="Gaussian Policy Training", description=descr_str, fromfile_prefix_chars="@"
+    prog="LSC Inverse Training", description=descr_str, fromfile_prefix_chars="@"
 )
 parser = cli.add_default_args(parser=parser)
 parser = cli.add_filepath_args(parser=parser)
