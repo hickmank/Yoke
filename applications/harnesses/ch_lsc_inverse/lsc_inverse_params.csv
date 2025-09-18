@@ -4,8 +4,9 @@ studyIDX,KNODES,NGPUS,NUM_WORKERS,BATCH_SIZE,NTRN_BATCH,NVAL_BATCH,ANCHOR_LR,NUM
 # Tune LR and epoch parameters
 # Approx. 25min/epoch
 2,1,4,2,4,1500,500,1.0e-3,0.5,0.5,1000,500,train_lsc_inverse.py
-# Approx. 45min/epoch
+# Approx. 45min/epoch, for some reason batchsize=8 is unstable
 3,1,4,2,8,1500,500,1.0e-3,0.5,0.5,1000,500,train_lsc_inverse.py
+# Batchsize 10 takes very long
 #4,1,4,2,10,1500,500,1.0e-3,0.5,0.5,1000,500,train_lsc_inverse.py
 
 

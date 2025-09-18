@@ -32,6 +32,38 @@ parser = cli.add_default_args(parser=parser)
 parser = cli.add_filepath_args(parser=parser)
 parser = cli.add_training_args(parser=parser)
 parser = cli.add_cosine_lr_scheduler_args(parser=parser)
+        
+parser.add_argument(
+    "--size_threshold",
+    action="store",
+    type=int,
+    default=12,
+    help="Threshold to reduce CNN output image (default: 12).",
+) 
+
+parser.add_argument(
+    "--features",
+    action="store",
+    type=int,
+    default=32,
+    help="Number of neurons in each CNN layer (default: 32).",
+)
+
+parser.add_argument(
+    "--interp_depth",
+    action="store",
+    type=int,
+    default=20,
+    help="Number of interpretability layers prior to reduction (default: 20).",
+)
+
+parser.add_argument(
+    "--hidden_features",
+    action="store",
+    type=int,
+    default=32,
+    help="Number of neurons in layers of final MLPs (default: 32).",
+)
 
 
 def setup_distributed() -> tuple[int, int, int, torch.device]:
@@ -94,6 +126,12 @@ def main(
     train_filelist = args.FILELIST_DIR + args.train_filelist
     validation_filelist = args.FILELIST_DIR + args.validation_filelist
 
+    # Model architecture parameters
+    size_threshold = args.size_threshold
+    features = args.features
+    interp_depth = args.interp_depth
+    hidden_features = args.hidden_features
+
     # LR-schedule Parameters
     anchor_lr = args.anchor_lr
     num_cycles = args.num_cycles
@@ -129,13 +167,13 @@ def main(
     model_args = {
         "img_size": (1, 1120, 800),
         "output_dim": 29,
-        "size_threshold": (12, 12),
+        "size_threshold": (size_threshold, size_threshold),
         "kernel": 3,
-        "features": 32,
-        "interp_depth": 20,
+        "features": features,
+        "interp_depth": interp_depth,
         "conv_onlyweights": True,
         "batchnorm_onlybias": True,
-        "hidden_features": 32,
+        "hidden_features": hidden_features,
     }
 
     #############################################

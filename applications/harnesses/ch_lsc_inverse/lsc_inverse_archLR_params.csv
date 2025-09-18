@@ -1,0 +1,4 @@
+studyIDX,KNODES,NGPUS,NUM_WORKERS,SIZE_THRESHOLD,FEATURES,INTERP_DEPTH,HIDDEN_FEATURES,BATCH_SIZE,NTRN_BATCH,NVAL_BATCH,ANCHOR_LR,NUM_CYCLES,MIN_FRACTION,TERMINAL_STEPS,WARMUP_STEPS,train_script
+# Tune LR and architecture
+# Approx. 25min/epoch, for some reason even batchsize of 8 is too large to be stable.
+1,1,4,2,12,32,20,32,4,1500,500,1.0e-3,0.5,0.5,1000,500,train_lsc_inverse.py
