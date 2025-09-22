@@ -422,6 +422,8 @@ class Image2VectorCNN(nn.Module):
         norm_layer (nn.modules.normalization): torch neural network layer class
         hidden_features (int): number of hidden features in the fully connected
                                dense layer
+        final_activation (nn.modules.activation): torch neural network layer class to use
+                                                  for the final output.
 
     """
 
@@ -438,6 +440,7 @@ class Image2VectorCNN(nn.Module):
         act_layer: nn.Module = nn.GELU,
         norm_layer: nn.Module = nn.LayerNorm,
         hidden_features: int = 32,
+        final_activation: nn.Module = nn.Linear,
     ) -> None:
         """Initialization for image-to-vector CNN."""
         super().__init__()
@@ -449,7 +452,8 @@ class Image2VectorCNN(nn.Module):
         self.features = features
         self.interp_depth = interp_depth
         self.hidden_features = hidden_features
-
+        self.final_activation = final_activation
+        
         self.conv_onlyweights = conv_onlyweights
         self.conv_weights = True
         self.conv_bias = not self.conv_onlyweights
@@ -525,6 +529,9 @@ class Image2VectorCNN(nn.Module):
         # MLP Output Layer
         x = self.out_mlp(x)
 
+        # Final activation
+        x = self.final_activation(x)
+        
         return x
 
 
