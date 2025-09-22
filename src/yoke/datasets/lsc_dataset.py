@@ -348,7 +348,8 @@ class LSC_cntr2hfield_DataSet(Dataset):
         self.half_image = half_image
         self.include_time = include_time
         self.hydro_fields = field_list
-
+        self.norm_file = norm_file
+        
         # Create filelist
         with open(filelist) as f:
             self.filelist = [line.rstrip() for line in f]
@@ -388,8 +389,8 @@ class LSC_cntr2hfield_DataSet(Dataset):
         hfield = torch.tensor(np.stack(hfield_list, axis=0)).to(torch.float32)
 
         # Get the contours and sim_time
-        if norm_file is not None:
-            norm_args = np.load(norm_file)
+        if self.norm_file is not None:
+            norm_args = np.load(self.norm_file)
             Bspline_min = norm_args['Bspline_min']
             Bspline_max = norm_args['Bspline_max']
             Bspline_rng = Bspline_max - Bspline_min
