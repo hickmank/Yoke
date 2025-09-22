@@ -320,6 +320,7 @@ class LSC_cntr2hfield_DataSet(Dataset):
         half_image: bool = True,
         include_time: bool = False,
         field_list: list[str] = ["density_throw"],
+        norm_file: str | None = None,
     ) -> None:
         """Initialization of class.
 
@@ -335,6 +336,9 @@ class LSC_cntr2hfield_DataSet(Dataset):
             include_time (bool): If True then time information is included in the output
             field_list (List[str]): List of hydro-dynamic fields to include as channels
                                     in image.
+            norm_file (str | None): Filename of normalization file. Currently only
+                                    normalizes the contour inputs and time, not the
+                                    image.
 
         """
         # Model Arguments
@@ -384,15 +388,39 @@ class LSC_cntr2hfield_DataSet(Dataset):
         hfield = torch.tensor(np.stack(hfield_list, axis=0)).to(torch.float32)
 
         # Get the contours and sim_time
-        sim_key = LSCnpz2key(self.LSC_NPZ_DIR + filepath)
-        Bspline_nodes = LSCcsv2bspline_pts(self.design_file, sim_key)
-        if self.include_time:
-            sim_time = npz["sim_time"]
+        if norm_file is not None:
+            norm_args = np.load(norm_file)
+            Bspline_min = norm_args['Bspline_min']
+            Bspline_max = norm_args['Bspline_max']
+            Bspline_rng = Bspline_max - Bspline_min
+            
+            sim_key = LSCnpz2key(self.LSC_NPZ_DIR + filepath)
+            Bspline_nodes = LSCcsv2bspline_pts(self.design_file, sim_key)
 
-            sim_params = np.append(Bspline_nodes, sim_time)
-            geom_params = torch.from_numpy(sim_params).to(torch.float32)
+            Bspline_nodes = 2.0 * (Bspline_nodes - Bspline_min) / Bspline_rng - 1.0
+            
+            if self.include_time:
+                Tmax = 25.0
+                
+                sim_time = npz["sim_time"]
+                sim_time = 2.0 * (sim_time / 25.0) - 1.0
+                
+                sim_params = np.append(Bspline_nodes, sim_time)
+                geom_params = torch.from_numpy(sim_params).to(torch.float32)
+            else:
+                geom_params = torch.from_numpy(Bspline_nodes).to(torch.float32)
+
+            
         else:
-            geom_params = torch.from_numpy(Bspline_nodes).to(torch.float32)
+            sim_key = LSCnpz2key(self.LSC_NPZ_DIR + filepath)
+            Bspline_nodes = LSCcsv2bspline_pts(self.design_file, sim_key)
+            if self.include_time:
+                sim_time = npz["sim_time"]
+
+                sim_params = np.append(Bspline_nodes, sim_time)
+                geom_params = torch.from_numpy(sim_params).to(torch.float32)
+            else:
+                geom_params = torch.from_numpy(Bspline_nodes).to(torch.float32)
 
         npz.close()
 
@@ -410,6 +438,7 @@ class LSC_hfield2cntr_DataSet(LSC_cntr2hfield_DataSet):
         half_image: bool = True,
         include_time: bool = False,
         field_list: list[str] = ["density_throw"],
+        norm_file: str | None = None,
     ) -> None:
         """Initialization of class."""
         super().__init__(
@@ -419,6 +448,7 @@ class LSC_hfield2cntr_DataSet(LSC_cntr2hfield_DataSet):
             half_image=half_image,
             include_time=include_time,
             field_list=field_list,
+            norm_file=norm_file,
         )
 
     def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:

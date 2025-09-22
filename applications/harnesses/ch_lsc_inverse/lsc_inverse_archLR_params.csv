@@ -1,19 +1,21 @@
 studyIDX,KNODES,NGPUS,NUM_WORKERS,SIZE_THRESHOLD,FEATURES,INTERP_DEPTH,HIDDEN_FEATURES,BATCH_SIZE,NTRN_BATCH,NVAL_BATCH,ANCHOR_LR,NUM_CYCLES,MIN_FRACTION,TERMINAL_STEPS,WARMUP_STEPS,train_script
 # Tune LR and architecture
 # Approx. 25min/epoch, for some reason even batchsize of 8 is too large to be stable.
-#1,1,4,2,12,32,20,32,4,1500,500,1.0e-3,0.5,0.5,1000,500,train_lsc_inverse.py
-2,1,4,2,12,32,20,32,4,1500,500,1.0e-2,0.5,0.5,1000,500,train_lsc_inverse.py
-3,1,4,2,12,32,20,32,4,1500,500,1.0e-4,0.5,0.5,1000,500,train_lsc_inverse.py
-# OOM error
-4,1,4,2,12,64,20,32,4,1500,500,1.0e-2,0.5,0.5,1000,500,train_lsc_inverse.py
-5,1,4,2,12,64,20,32,4,1500,500,1.0e-3,0.5,0.5,1000,500,train_lsc_inverse.py
-6,1,4,2,12,64,20,32,4,1500,500,1.0e-4,0.5,0.5,1000,500,train_lsc_inverse.py
+# OOM error for FEATURES = 64
+1,1,4,2,12,16,20,32,4,1500,500,1.0e-2,0.5,0.5,1000,500,train_lsc_inverse.py
+2,1,4,2,12,16,20,32,4,1500,500,1.0e-3,0.5,0.5,1000,500,train_lsc_inverse.py
+3,1,4,2,12,16,20,32,4,1500,500,1.0e-4,0.5,0.5,1000,500,train_lsc_inverse.py
 #
-7,1,4,2,12,32,20,64,4,1500,500,1.0e-2,0.5,0.5,1000,500,train_lsc_inverse.py
-8,1,4,2,12,32,20,64,4,1500,500,1.0e-3,0.5,0.5,1000,500,train_lsc_inverse.py
-9,1,4,2,12,32,20,64,4,1500,500,1.0e-4,0.5,0.5,1000,500,train_lsc_inverse.py
-# OOM error
-10,1,4,2,12,64,20,64,4,1500,500,1.0e-2,0.5,0.5,1000,500,train_lsc_inverse.py
-11,1,4,2,12,64,20,64,4,1500,500,1.0e-3,0.5,0.5,1000,500,train_lsc_inverse.py
-12,1,4,2,12,64,20,64,4,1500,500,1.0e-4,0.5,0.5,1000,500,train_lsc_inverse.py
+4,1,4,2,12,16,20,64,4,1500,500,1.0e-2,0.5,0.5,1000,500,train_lsc_inverse.py
+5,1,4,2,12,16,20,64,4,1500,500,1.0e-3,0.5,0.5,1000,500,train_lsc_inverse.py
+6,1,4,2,12,16,20,64,4,1500,500,1.0e-4,0.5,0.5,1000,500,train_lsc_inverse.py
+#
+7,1,4,2,12,32,20,32,4,1500,500,1.0e-2,0.5,0.5,1000,500,train_lsc_inverse.py
+8,1,4,2,12,32,20,32,4,1500,500,1.0e-3,0.5,0.5,1000,500,train_lsc_inverse.py
+9,1,4,2,12,32,20,32,4,1500,500,1.0e-4,0.5,0.5,1000,500,train_lsc_inverse.py
+#
+10,1,4,2,12,32,20,64,4,1500,500,1.0e-2,0.5,0.5,1000,500,train_lsc_inverse.py
+11,1,4,2,12,32,20,64,4,1500,500,1.0e-3,0.5,0.5,1000,500,train_lsc_inverse.py
+12,1,4,2,12,32,20,64,4,1500,500,1.0e-4,0.5,0.5,1000,500,train_lsc_inverse.py
+
 

@@ -32,7 +32,16 @@ parser = cli.add_default_args(parser=parser)
 parser = cli.add_filepath_args(parser=parser)
 parser = cli.add_training_args(parser=parser)
 parser = cli.add_cosine_lr_scheduler_args(parser=parser)
-        
+
+norm_dir = "/usr/projects/artimis/mpmm/hickmank/policy_yoke/applications/normalization/"
+parser.add_argument(
+    "--norm_file",
+    action="store",
+    type=str,
+    default=norm_dir + "lsc240420_Bspline_norms.npz",
+    help="NPZ file containing dataset normalizations.",
+)
+    
 parser.add_argument(
     "--size_threshold",
     action="store",
@@ -125,7 +134,8 @@ def main(
     design_file = os.path.abspath(args.LSC_DESIGN_DIR + args.design_file)
     train_filelist = args.FILELIST_DIR + args.train_filelist
     validation_filelist = args.FILELIST_DIR + args.validation_filelist
-
+    norm_file = args.norm_file
+    
     # Model architecture parameters
     size_threshold = args.size_threshold
     features = args.features
@@ -267,6 +277,7 @@ def main(
         half_image=False,
         include_time=True,
         field_list=["density_throw"],
+        norm_file=norm_file,
     )
     val_dataset = LSC_hfield2cntr_DataSet(
         args.LSC_NPZ_DIR,
@@ -274,7 +285,8 @@ def main(
         design_file=design_file,
         half_image=False,
         include_time=True,
-        field_list=["density_throw"]
+        field_list=["density_throw"],
+        norm_file=norm_file,
     )
 
     # NOTE: For DDP the batch_size is the per-GPU batch_size!!!

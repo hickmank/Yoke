@@ -1,0 +1,12 @@
+--FILELIST_DIR
+/usr/projects/artimis/mpmm/hickmank/policy_yoke/applications/filelists/
+--eval_filelist
+lsc240420_train_80pct.txt
+--LSC_DESIGN_DIR
+/lustre/scratch5/exempt/artimis/data/
+--design_file
+design_lsc240420_MASTER.csv
+--LSC_NPZ_DIR
+/lustre/scratch5/exempt/artimis/data/lsc240420/
+--fileout
+lsc240420_Bspline_norms.npz
