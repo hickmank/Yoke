@@ -452,7 +452,7 @@ class Image2VectorCNN(nn.Module):
         self.features = features
         self.interp_depth = interp_depth
         self.hidden_features = hidden_features
-        self.final_activation = final_activation
+        self.final_activation = final_activation()
         
         self.conv_onlyweights = conv_onlyweights
         self.conv_weights = True

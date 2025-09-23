@@ -184,6 +184,8 @@ def main(
         "conv_onlyweights": True,
         "batchnorm_onlybias": True,
         "hidden_features": hidden_features,
+        #"final_activation": nn.Identity,
+        "final_activation": nn.Tanh,
     }
 
     #############################################
