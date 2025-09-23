@@ -440,7 +440,7 @@ class Image2VectorCNN(nn.Module):
         act_layer: nn.Module = nn.GELU,
         norm_layer: nn.Module = nn.LayerNorm,
         hidden_features: int = 32,
-        final_activation: nn.Module = nn.Linear,
+        final_activation: nn.Module = nn.Identity,
     ) -> None:
         """Initialization for image-to-vector CNN."""
         super().__init__()
