@@ -352,7 +352,7 @@ class gaussian_Image2VectorCNN(nn.Module):
             input_dim=self.i2v_cnn.hidden_features,
             output_dim=self.num_cov_elements,
             hidden_feature_list=(2 * self.i2v_cnn.hidden_features,),  # Could expand.
-            act_layer=self.act_layer,
+            act_layer=act_layer,
             norm_layer=nn.Identity,
         )
         self._init_cov_mlp(self.cov_mlp, self.i2v_cnn.output_dim, self.min_variance)
