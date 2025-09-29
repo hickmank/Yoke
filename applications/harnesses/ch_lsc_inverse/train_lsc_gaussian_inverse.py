@@ -8,9 +8,9 @@ import torch.nn as nn
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from yoke.models.CNNmodules import Image2VectorCNN
+from yoke.models.policyCNNmodules import gaussian_Image2VectorCNN
 from yoke.datasets.lsc_dataset import LSC_hfield2cntr_DataSet
-from yoke.utils.training.epoch.array_output import train_DDP_array_epoch
+from yoke.utils.training.epoch.lsc_gaussian import train_lsc_gaussian_epoch
 from yoke.utils.restart import continuation_setup
 from yoke.utils.dataload import make_distributed_dataloader
 from yoke.utils.checkpointing import load_model_and_optimizer
@@ -23,10 +23,12 @@ from yoke.helpers import cli
 # Inputs
 #############################################
 descr_str = (
-    "Uses DDP to train parameter-estimation CNN."
+    "Uses DDP to train gaussian parameter-estimation CNN."
 )
 parser = argparse.ArgumentParser(
-    prog="LSC Inverse Training", description=descr_str, fromfile_prefix_chars="@"
+    prog="LSC Gaussian Inverse Training",
+    description=descr_str,
+    fromfile_prefix_chars="@"
 )
 parser = cli.add_default_args(parser=parser)
 parser = cli.add_filepath_args(parser=parser)
@@ -168,7 +170,7 @@ def main(
 
     # Dictionary of available models.
     available_models = {
-        "Image2VectorCNN": Image2VectorCNN
+        "gaussian_Image2VectorCNN": gaussian_Image2VectorCNN
     }
 
     #################################################
@@ -184,8 +186,7 @@ def main(
         "conv_onlyweights": True,
         "batchnorm_onlybias": True,
         "hidden_features": hidden_features,
-        #"final_activation": nn.Identity,
-        "final_activation": nn.Tanh,
+        "final_activation": nn.Identity,
     }
 
     #############################################
@@ -198,21 +199,25 @@ def main(
             checkpoint,
             optimizer_class=torch.optim.AdamW,
             optimizer_kwargs={
-                "lr": 1e-2,
+                "lr": 1e-3,
                 "betas": (0.9, 0.999),
                 "eps": 1e-08,
-                "weight_decay": 0.01,
+                "weight_decay": 0.0, # 0.01, zero weight decay for only mean_mlp
             },
             available_models=available_models,
             device=device,
         )
+
+        # Freeze parameters of loaded model
+        for param in model.cov_mlp.parameters():
+            param.requires_grad = False
 
         print("Model state loaded for continuation.")
     else:
         # Initialize model and optimizer state.
         # If not continuing, set starting_epoch to 0.
         starting_epoch = 0
-        model = Image2VectorCNN(**model_args)
+        model = gaussian_Image2VectorCNN(**model_args)
         # Move model to GPU before instantiating optimizer and DDP.
         model.to(device)
 
@@ -224,6 +229,10 @@ def main(
             eps=1e-08,
             weight_decay=0.0  #0.01, zero weight decay for only mean_mlp
         )
+
+        # Freeze parameters of loaded model
+        for param in model.cov_mlp.parameters():
+            param.requires_grad = False
 
         for state in optimizer.state.values():
             for key, value in state.items():
@@ -331,7 +340,7 @@ def main(
             startTime = time.time()
 
         # Train and Validate
-        train_DDP_array_epoch(
+        train_lsc_gaussian_epoch(
             training_data=train_dataloader,
             validation_data=val_dataloader,
             num_train_batches=train_batches,
@@ -372,7 +381,7 @@ def main(
         optimizer,
         epochIDX,
         new_chkpt_path,
-        model_class=Image2VectorCNN,
+        model_class=gaussian_Image2VectorCNN,
         model_args=model_args
     )
 

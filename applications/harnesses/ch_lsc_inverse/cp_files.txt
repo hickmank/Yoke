@@ -1,1 +1,2 @@
 train_lsc_inverse.py
+train_lsc_gaussian_inverse.py
