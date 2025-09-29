@@ -11,13 +11,13 @@
 # partition. There are optional other constraints.
 
 #SBATCH --job-name=inverse_s<studyIDX>_e0001
-#SBATCH --account=w25_artimis_g
-#SBATCH --partition=gpu
+#PRODUCTION  #SBATCH --account=w25_artimis_g
+#PRODUCTION  #SBATCH --partition=gpu
+#PRODUCTION  #SBATCH --time=02:00:00
 #SBATCH --time=02:00:00
-#DEBUG  #SBATCH --time=0:45:00
-#DEBUG  #SBATCH --qos=debug
-#DEBUG  #SBATCH --reservation=gpu_debug
-#DEBUG  #SBATCH --partition=gpu_debug
+#SBATCH --qos=debug
+#SBATCH --reservation=gpu_debug
+#SBATCH --partition=gpu_debug
 #SBATCH --nodes=<KNODES>
 #SBATCH --ntasks-per-node=<NGPUS>
 #SBATCH --gpus-per-node=<NGPUS>
