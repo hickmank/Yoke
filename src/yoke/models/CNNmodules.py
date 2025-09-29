@@ -424,6 +424,7 @@ class Image2VectorCNN(nn.Module):
                                dense layer
         final_activation (nn.modules.activation): torch neural network layer class to use
                                                   for the final output.
+        return_hidden (bool): Flag to return output from CNN layers prior to MLP outputs
 
     """
 
@@ -441,6 +442,7 @@ class Image2VectorCNN(nn.Module):
         norm_layer: nn.Module = nn.LayerNorm,
         hidden_features: int = 32,
         final_activation: nn.Module = nn.Identity,
+        return_hidden: bool = False,
     ) -> None:
         """Initialization for image-to-vector CNN."""
         super().__init__()
@@ -453,7 +455,8 @@ class Image2VectorCNN(nn.Module):
         self.interp_depth = interp_depth
         self.hidden_features = hidden_features
         self.final_activation = final_activation()
-        
+        self.return_hidden = return_hidden
+
         self.conv_onlyweights = conv_onlyweights
         self.conv_weights = True
         self.conv_bias = not self.conv_onlyweights
@@ -523,16 +526,19 @@ class Image2VectorCNN(nn.Module):
         x = torch.flatten(x, start_dim=1)
 
         # Hidden Layer
-        x = self.hidden(x)
-        x = self.hiddenActivation(x)
+        hidden_out = self.hidden(x)
+        hidden_out = self.hiddenActivation(hidden_out)
 
         # MLP Output Layer
-        x = self.out_mlp(x)
+        out = self.out_mlp(hidden_out)
 
         # Final activation
-        x = self.final_activation(x)
-        
-        return x
+        out = self.final_activation(out)
+
+        if self.return_hidden:
+            return out, hidden_out
+        else:
+            return out
 
 
 if __name__ == "__main__":

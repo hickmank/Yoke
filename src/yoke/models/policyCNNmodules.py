@@ -328,7 +328,7 @@ class gaussian_Image2VectorCNN(nn.Module):
     ) -> None:
         """Initialization for probabilistic image-to-vector CNN."""
         self.min_variance = min_variance
-        
+
         # Main CNN branch
         self.i2v_cnn = Image2VectorCNN(img_size=img_size,
                                        output_dim=output_dim,
@@ -341,7 +341,8 @@ class gaussian_Image2VectorCNN(nn.Module):
                                        act_layer=act_layer,
                                        norm_layer=norm_layer,
                                        hidden_features=hidden_features,
-                                       final_activation=final_activate,
+                                       final_activation=final_activation,
+                                       return_hidden=True,
                                        )
 
         # Covariance MLP
@@ -399,10 +400,10 @@ class gaussian_Image2VectorCNN(nn.Module):
     ) -> torch.Tensor:
         """Forward method for probabilistic Image-to-Vector CNN."""
         # Predict the mean.
-        mean = self.i2v_cnn(h)
+        mean_out, hidden_out = self.i2v_cnn(h)
 
         # Predict the covariance
-        L_params = self.cov_mlp(cat)
+        L_params = self.cov_mlp(hidden_out)
 
         # Use Cholesky decomposition to ensure positive definite covariance.
         triIDXs = torch.tril_indices(self.i2v_cnn.output_dim, self.i2v_cnn.output_dim)
@@ -423,10 +424,9 @@ class gaussian_Image2VectorCNN(nn.Module):
         cov_matrix = torch.matmul(L, L.transpose(-1, -2))
 
         # Return a MultivariateNormal distribution
-        return MultivariateNormal(mean, covariance_matrix=cov_matrix)
-    
-    
-        
+        return MultivariateNormal(mean_out, covariance_matrix=cov_matrix)
+
+
 if __name__ == "__main__":
     """For testing and debugging.
 
