@@ -327,6 +327,7 @@ class gaussian_Image2VectorCNN(nn.Module):
         final_activation: nn.Module = nn.Identity,
     ) -> None:
         """Initialization for probabilistic image-to-vector CNN."""
+        super().__init__()
         self.min_variance = min_variance
 
         # Main CNN branch
@@ -346,7 +347,7 @@ class gaussian_Image2VectorCNN(nn.Module):
                                        )
 
         # Covariance MLP
-        self.num_cov_elements = self.output_dim * (self.output_dim + 1) // 2
+        self.num_cov_elements = output_dim * (output_dim + 1) // 2
         self.cov_mlp = generalMLP(
             input_dim=self.i2v_cnn.hidden_features,
             output_dim=self.num_cov_elements,
