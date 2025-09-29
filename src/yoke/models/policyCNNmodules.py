@@ -8,6 +8,7 @@ from yoke.utils.parameters import count_torch_params
 
 from yoke.models.CNNmodules import CNN_Interpretability_Module
 from yoke.models.CNNmodules import CNN_Reduction_Module
+from yoke.models.CNNmodules import Image2VectorCNN
 from yoke.models.cnn_utils import generalMLP
 
 
@@ -278,6 +279,154 @@ class gaussian_policyCNN(nn.Module):
         return MultivariateNormal(mean, covariance_matrix=cov_matrix)
 
 
+class gaussian_Image2VectorCNN(nn.Module):
+    """Probabilistic image-to-vector CNN.
+
+    Convolutional Neural Network Model that maps an image to a multivariate normal
+    distribution. Constructed using a deterministic image-to-vector CNN fed into two MLP
+    structures, one to estimate the mean and a second MLP to estimate the covariance of
+    the multivariate normal.
+
+    Args:
+        img_size (tuple[int, int, int]): size of input (channels, height, width)
+        output_dim (int): size of output vector
+        min_variance (float): Minimum variance in diagonal covariance entries.
+        size_threshold (tuple[int, int]): (approximate) size of reduced image
+                                          (height, width)
+        kernel (int): size of square convolutional kernel
+        features (int): number of features in the convolutional layers
+        interp_depth (int): number of interpretability blocks
+        conv_onlyweights (bool): determines if convolutional layers learn only
+                                 weights or weights and bias
+        batchnorm_onlybias (bool): determines if the batch normalization layers
+                                   learn only bias or weights and bias
+        act_layer (nn.modules.activation): torch neural network layer class to
+                                           use as activation
+        norm_layer (nn.modules.normalization): torch neural network layer class
+        hidden_features (int): number of hidden features in the fully connected
+                               dense layer
+        final_activation (nn.modules.activation): torch neural network layer class to use
+                                                  for the final output.
+
+    """
+
+    def __init__(
+        self,
+        img_size: tuple[int, int, int] = (1, 1120, 400),
+        output_dim: int = 29,
+        min_variance: float = 1e-6,
+        size_threshold: tuple[int, int] = (12, 12),
+        kernel: int = 3,
+        features: int = 16,
+        interp_depth: int = 12,
+        conv_onlyweights: bool = True,
+        batchnorm_onlybias: bool = True,
+        act_layer: nn.Module = nn.GELU,
+        norm_layer: nn.Module = nn.LayerNorm,
+        hidden_features: int = 32,
+        final_activation: nn.Module = nn.Identity,
+    ) -> None:
+        """Initialization for probabilistic image-to-vector CNN."""
+        self.min_variance = min_variance
+        
+        # Main CNN branch
+        self.i2v_cnn = Image2VectorCNN(img_size=img_size,
+                                       output_dim=output_dim,
+                                       size_threshold=size_threshold,
+                                       kernel=kernel,
+                                       features=features,
+                                       interp_depth=interp_depth,
+                                       conv_onlyweights=conv_onlyweights,
+                                       batchnorm_onlybias=batchnorm_onlybias,
+                                       act_layer=act_layer,
+                                       norm_layer=norm_layer,
+                                       hidden_features=hidden_features,
+                                       final_activation=final_activate,
+                                       )
+
+        # Covariance MLP
+        self.num_cov_elements = self.output_dim * (self.output_dim + 1) // 2
+        self.cov_mlp = generalMLP(
+            input_dim=self.i2v_cnn.hidden_features,
+            output_dim=self.num_cov_elements,
+            hidden_feature_list=(2 * self.i2v_cnn.hidden_features,),  # Could expand.
+            act_layer=self.act_layer,
+            norm_layer=nn.Identity,
+        )
+        self._init_cov_mlp(self.cov_mlp, self.i2v_cnn.output_dim, self.min_variance)
+
+    def _init_cov_mlp(
+        self, mlp: nn.Module, output_dim: int, min_var: float = 1e-6
+    ) -> None:
+        """Initialize covariance layer to output identity.
+
+        Initializes the final layer of the MLP such that the predicted Cholesky
+        factor L results in a covariance matrix close to identity.
+
+        Args:
+            mlp (nn.Module): Multi-layer perceptron module. Must have last layer linear.
+            output_dim (int): Dimension of network output.
+            min_var (float): Minimum variance on covariance diagonal
+
+        """
+        tril_indices = torch.tril_indices(output_dim, output_dim)
+
+        # Find the last linear layer (which has no activation)
+        last_layer = mlp.LayerList[-1][0]  # Should be the "linear" layer
+        err_msg = "Expected final MLP layer to be nn.Linear"
+        assert isinstance(last_layer, nn.Linear), err_msg
+
+        with torch.no_grad():
+            # Start with all zeros
+            last_layer.weight.zero_()
+            last_layer.bias.zero_()
+
+            # Set diagonal entries of L such that softplus(bias) + min_var ~ 1
+            target_diag = 1.0 - min_var
+            # softplus inverse
+            init_bias_val = torch.log(torch.exp(torch.tensor(target_diag)) - 1.0)
+            init_bias_val = init_bias_val.item()
+
+            for idx, (row, col) in enumerate(zip(tril_indices[0], tril_indices[1])):
+                if row == col:
+                    last_layer.bias[idx] = init_bias_val  # Diagonal element
+                else:
+                    last_layer.bias[idx] = 0.0  # Off-diagonal
+
+    def forward(
+        self,
+        h: torch.Tensor,
+    ) -> torch.Tensor:
+        """Forward method for probabilistic Image-to-Vector CNN."""
+        # Predict the mean.
+        mean = self.i2v_cnn(h)
+
+        # Predict the covariance
+        L_params = self.cov_mlp(cat)
+
+        # Use Cholesky decomposition to ensure positive definite covariance.
+        triIDXs = torch.tril_indices(self.i2v_cnn.output_dim, self.i2v_cnn.output_dim)
+        L = torch.zeros(h.size(0),
+                        self.i2v_cnn.output_dim,
+                        self.i2v_cnn.output_dim,
+                        device=h.device)
+        L[:, triIDXs[0], triIDXs[1]] = L_params
+
+        # Ensure positive diagonal with softplus(z) = log(1+exp(z))
+        diagIDXs = torch.arange(self.i2v_cnn.output_dim)
+        L[:, diagIDXs, diagIDXs] = nn.functional.softplus(L[:, diagIDXs, diagIDXs])
+
+        # Ensure a minimum variance
+        L[:, diagIDXs, diagIDXs] += self.min_variance
+
+        # Reconstruct covariance matrix assuming Cholesky factorization.
+        cov_matrix = torch.matmul(L, L.transpose(-1, -2))
+
+        # Return a MultivariateNormal distribution
+        return MultivariateNormal(mean, covariance_matrix=cov_matrix)
+    
+    
+        
 if __name__ == "__main__":
     """For testing and debugging.
 
