@@ -15,6 +15,8 @@ studyIDX,KNODES,NGPUS,NUM_WORKERS,SIZE_THRESHOLD,FEATURES,INTERP_DEPTH,HIDDEN_FE
 9,1,4,2,12,32,20,32,4,1500,500,1.0e-4,0.5,0.5,1000,500,train_lsc_inverse.py
 #
 10,1,4,2,12,32,20,64,4,1500,500,1.0e-2,0.5,0.5,1000,500,train_lsc_inverse.py
+# 11 is optimal for normalized training with and without tanh activation
+# NOTE: It appears non-tanh activation is slightly better.
 11,1,4,2,12,32,20,64,4,1500,500,1.0e-3,0.5,0.5,1000,500,train_lsc_inverse.py
 12,1,4,2,12,32,20,64,4,1500,500,1.0e-4,0.5,0.5,1000,500,train_lsc_inverse.py
 
