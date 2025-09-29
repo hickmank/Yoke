@@ -427,6 +427,81 @@ class gaussian_Image2VectorCNN(nn.Module):
         return MultivariateNormal(mean_out, covariance_matrix=cov_matrix)
 
 
+class DifferenceMVN(nn.Module):
+    """Difference of multi-variate normal prediction nets.
+
+    Combine two trained gaussian_Image2VectorCNN models to predict the MVN
+    of the difference (vec1 - vec2) given two images.
+
+    Assumes independence between the two predictive distributions, so
+    Cov(Y1 - Y2) = Cov(Y1) + Cov(Y2).
+
+    Args:
+        net1 (nn.Module): Expects pre-trained MVN predictor.
+        net2 (nn.Module): Expects pre-trained MVN predictor.
+        freeze (bool): Flag to enable fine tuning.
+    """
+
+    def __init__(self, net1: nn.Module, net2: nn.Module, freeze: bool = True) -> None:
+        """Initialization with two networks."""
+        super().__init__()
+        self.net1 = net1
+        self.net2 = net2
+
+        # Sanity check on output dims (optional but helpful)
+        try:
+            self.out_dim1 = self.net1.i2v_cnn.output_dim
+            self.out_dim2 = self.net2.i2v_cnn.output_dim
+        except AttributeError:
+            err_msg = ('Expected gaussian_Image2VectorCNN-like modules with '
+                       'i2v_cnn.output_dim.')
+            raise ValueError(err_msg)
+
+        if self.out_dim1 != self.out_dim2:
+            err_msg = f"Output dims must match, got {self.out_dim1} vs {self.out_dim2}"
+            raise ValueError(err_msg)
+
+        if freeze:
+            for p in self.net1.parameters():
+                p.requires_grad = False
+            for p in self.net2.parameters():
+                p.requires_grad = False
+            self.net1.eval()
+            self.net2.eval()
+
+    def forward(self, img1: torch.Tensor, img2: torch.Tensor) -> MultivariateNormal:
+        """Difference MVN forward method."""
+        # Each net returns a MultivariateNormal
+        dist1: MultivariateNormal = self.net1(img1)
+        dist2: MultivariateNormal = self.net2(img2)
+
+        # Means: (B, D)
+        mu1 = dist1.mean
+        mu2 = dist2.mean
+
+        # Covariances: (B, D, D)
+        # Prefer covariance_matrix because it's guaranteed PSD from your construction.
+        # If only scale_tril is available, you can reconstruct via L @ L^T.
+        if dist1.covariance_matrix is None:
+            L1 = dist1.scale_tril
+            Sigma1 = L1 @ L1.transpose(-1, -2)
+        else:
+            Sigma1 = dist1.covariance_matrix
+
+        if dist2.covariance_matrix is None:
+            L2 = dist2.scale_tril
+            Sigma2 = L2 @ L2.transpose(-1, -2)
+        else:
+            Sigma2 = dist2.covariance_matrix
+
+        # Difference distribution parameters
+        mu_delta = mu1 - mu2
+        Sigma_delta = Sigma1 + Sigma2  # assumes independence
+
+        # Return an MVN for the difference
+        return MultivariateNormal(loc=mu_delta, covariance_matrix=Sigma_delta)
+
+
 if __name__ == "__main__":
     """For testing and debugging.
 
