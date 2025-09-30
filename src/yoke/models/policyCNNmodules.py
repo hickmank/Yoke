@@ -2,6 +2,7 @@
 
 import torch
 import torch.nn as nn
+import torch.distributed as dist
 from torch.distributions import MultivariateNormal
 
 from yoke.utils.parameters import count_torch_params
@@ -438,21 +439,26 @@ class DifferenceMVN(nn.Module):
     Cov(Y1 - Y2) = Cov(Y1) + Cov(Y2).
 
     Args:
-        net1 (nn.Module): Expects pre-trained MVN predictor.
-        net2 (nn.Module): Expects pre-trained MVN predictor.
+        mvn1_args (dict): kwarg dictionary to initialize `gaussian_Image2VectorCNN`.
+        mvn2_args (dict): kwarg dictionary to initialize `gaussian_Image2VectorCNN`.
         freeze (bool): Flag to enable fine tuning.
     """
 
-    def __init__(self, net1: nn.Module, net2: nn.Module, freeze: bool = True) -> None:
+    def __init__(
+            self,
+            mvn1_args: dict,
+            mvn2_args: dict,
+            freeze: bool = False,
+            ) -> None:
         """Initialization with two networks."""
         super().__init__()
-        self.net1 = net1
-        self.net2 = net2
+        self.mvn1 = gaussian_Image2VectorCNN(**mvn1_args)
+        self.mvn2 = gaussian_Image2VectorCNN(**mvn2_args)
 
         # Sanity check on output dims (optional but helpful)
         try:
-            self.out_dim1 = self.net1.i2v_cnn.output_dim
-            self.out_dim2 = self.net2.i2v_cnn.output_dim
+            self.out_dim1 = self.mvn1.i2v_cnn.output_dim
+            self.out_dim2 = self.mvn2.i2v_cnn.output_dim
         except AttributeError:
             err_msg = ('Expected gaussian_Image2VectorCNN-like modules with '
                        'i2v_cnn.output_dim.')
@@ -463,18 +469,18 @@ class DifferenceMVN(nn.Module):
             raise ValueError(err_msg)
 
         if freeze:
-            for p in self.net1.parameters():
+            for p in self.mvn1.parameters():
                 p.requires_grad = False
-            for p in self.net2.parameters():
+            for p in self.mvn2.parameters():
                 p.requires_grad = False
-            self.net1.eval()
-            self.net2.eval()
+            self.mvn1.eval()
+            self.mvn2.eval()
 
     def forward(self, img1: torch.Tensor, img2: torch.Tensor) -> MultivariateNormal:
         """Difference MVN forward method."""
         # Each net returns a MultivariateNormal
-        dist1: MultivariateNormal = self.net1(img1)
-        dist2: MultivariateNormal = self.net2(img2)
+        dist1: MultivariateNormal = self.mvn1(img1)
+        dist2: MultivariateNormal = self.mvn2(img2)
 
         # Means: (B, D)
         mu1 = dist1.mean
@@ -501,6 +507,58 @@ class DifferenceMVN(nn.Module):
 
         # Return an MVN for the difference
         return MultivariateNormal(loc=mu_delta, covariance_matrix=Sigma_delta)
+
+    @classmethod
+    def from_two_gaussian_checkpoints(
+        cls,
+        mvn1_ckpt: str,
+        mvn2_ckpt: str,
+        device: str = "cuda",
+        ) -> nn.Module:
+        """Instantiation method from two network checkpoints.
+
+        Args:
+            mvn1_ckpt (str): Filename of checkpoint to load for mvn1
+            mvn2_ckpt (str): Filename of checkpoint to load for mvn2
+            device (str): Device name to load objects to
+        """
+        # Load args + weights for each subnet (DDP-safe)
+        mvn1_args, mvn1_sd = load_gaussian_ckpt_light(mvn1_ckpt)
+        mvn2_args, mvn2_sd = load_gaussian_ckpt_light(mvn2_ckpt)
+
+        # Build composite
+        model = cls(mvn1_args=mvn1_args, mvn2_args=mvn2_args)
+        model.mvn1.load_state_dict(mvn1_sd, strict=True)
+        model.mvn2.load_state_dict(mvn2_sd, strict=True)
+        model.to(device)
+
+        return model
+
+
+def load_gaussian_ckpt_light(ckpt_path: str) -> tuple[dict, dict]:
+    """Light loader specifically for initialization of difference MVN.
+
+    Load a `gaussian_Image2VectorCNN` checkpoint written by Yoke checkpointer,
+    but only return (model_args, model_state_dict). DDP-safe via broadcast.
+    """
+    rank = dist.get_rank() if dist.is_initialized() else 0
+    ckpt = None
+
+    if rank == 0:
+        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+        if ckpt["model_class"] != "gaussian_Image2VectorCNN":
+            verr = f"Expected gaussian_Image2VectorCNN, got {ckpt['model_class']}"
+            raise ValueError(verr)
+
+    if dist.is_initialized():
+        lst = [ckpt]
+        dist.broadcast_object_list(lst, src=0)
+        ckpt = lst[0]
+
+    model_args = ckpt["model_args"]
+    model_state_dict = ckpt["model_state_dict"]
+
+    return model_args, model_state_dict
 
 
 if __name__ == "__main__":
