@@ -13,9 +13,9 @@ lsc240420_val_10pct.txt
 --design_file
 design_lsc240420_MASTER.csv
 --mvn_target_ckpt
-./*.pth
+./target_mvn_251001.pth
 --mvn_state_ckpt
-./*.pth
+./state_mvn_251001.pth
 --trn_rcrd_filename
 ./training_study<studyIDX>_epoch<epochIDX>.csv
 --val_rcrd_filename

@@ -121,6 +121,7 @@ Nsamps_per_val_pt = args_ns.Nsamps_per_val_pt
 # Of the form: training_study009_epoch0100.csv
 trn_glob = f"{basedir}/study_{IDX:03d}/training_study{IDX:03d}_epoch*.csv"
 trn_csv_list = sorted(glob.glob(trn_glob))
+print("Number of training CSVs:", len(trn_csv_list))
 
 # Throw out most recent training CSV if still in progress
 if INPROGRESS:
@@ -135,6 +136,7 @@ for Tcsv in trn_csv_list:
 # Of the form: validation_study009_epoch0010.csv
 val_glob = f"{basedir}/study_{IDX:03d}/validation_study{IDX:03d}_epoch*.csv"
 val_csv_list = sorted(glob.glob(val_glob))
+print("Number of validation CSVs:", len(val_csv_list))
 val_file_epochs = []
 for Vcsv in val_csv_list:
     epoch = Vcsv.split("epoch")[1]
