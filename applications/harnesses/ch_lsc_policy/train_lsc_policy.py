@@ -1,4 +1,4 @@
-"""Train a Gaussian Policy network using DDP."""
+"""Train a Gaussian-Difference Policy network using DDP."""
 
 import os
 import time
@@ -8,9 +8,10 @@ import torch.nn as nn
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from yoke.models.policyCNNmodules import gaussian_policyCNN
+from yoke.models.policyCNNmodules import DifferenceMVN
+from yoke.models.policyCNNmodules import gaussian_Image2VectorCNN
 from yoke.datasets.lsc_dataset import LSC_hfield_policy_DataSet
-from yoke.utils.training.epoch.lsc_policy import train_lsc_policy_epoch
+from yoke.utils.training.epoch.lsc_policy import train_diffMVN_policy_epoch
 from yoke.utils.restart import continuation_setup
 from yoke.utils.dataload import make_distributed_dataloader
 from yoke.utils.checkpointing import load_model_and_optimizer
@@ -23,15 +24,42 @@ from yoke.helpers import cli
 # Inputs
 #############################################
 descr_str = (
-    "Uses DDP to train Gaussian policy architecture."
+    "Uses DDP to train Gaussian-difference policy architecture."
 )
 parser = argparse.ArgumentParser(
-    prog="Gaussian Policy Training", description=descr_str, fromfile_prefix_chars="@"
+    prog="Gaussian-difference Policy Training",
+    description=descr_str,
+    fromfile_prefix_chars="@"
 )
 parser = cli.add_default_args(parser=parser)
 parser = cli.add_filepath_args(parser=parser)
 parser = cli.add_training_args(parser=parser)
 parser = cli.add_cosine_lr_scheduler_args(parser=parser)
+
+norm_dir = "/usr/projects/artimis/mpmm/hickmank/policy_yoke/applications/normalization/"
+parser.add_argument(
+    "--norm_file",
+    action="store",
+    type=str,
+    default=norm_dir + "lsc240420_Bspline_norms.npz",
+    help="NPZ file containing dataset normalizations.",
+)
+
+parser.add_argument(
+    "--mvn_target_ckpt",
+    action="store",
+    type=str,
+    default="./mvn_target.pth",
+    help="Checkpoint file for the MVN network to analyze target.",
+)
+
+parser.add_argument(
+    "--mvn_state_ckpt",
+    action="store",
+    type=str,
+    default="./mvn_state.pth",
+    help="Checkpoint file for the MVN network to analyze current state.",
+)
 
 
 def setup_distributed() -> tuple[int, int, int, torch.device]:
@@ -120,25 +148,8 @@ def main(
 
     # Dictionary of available models.
     available_models = {
-        "gaussian_policyCNN": gaussian_policyCNN
-    }
-
-    #############################################
-    # Model Arguments for Dynamic Reconstruction
-    #############################################
-    model_args = {
-        "img_size": (1, 1120, 800),
-        "input_vector_size": 28,
-        "output_dim": 28,
-        "min_variance": 1e-6,
-        "features": 12,
-        "depth": 15,
-        "kernel": 3,
-        "img_embed_dim": 32,
-        "vector_embed_dim": 32,
-        "size_reduce_threshold": (16, 16),
-        "vector_feature_list": (16, 64, 64, 16),
-        "output_feature_list": (16, 64, 64, 16)
+        "gaussian_Image2VectorCNN": gaussian_Image2VectorCNN,
+        "DifferenceMVN": DifferenceMVN
     }
 
     #############################################
@@ -151,7 +162,7 @@ def main(
             checkpoint,
             optimizer_class=torch.optim.AdamW,
             optimizer_kwargs={
-                "lr": 1e-2,
+                "lr": 1e-3,
                 "betas": (0.9, 0.999),
                 "eps": 1e-08,
                 "weight_decay": 0.01,
@@ -160,62 +171,27 @@ def main(
             device=device,
         )
 
-        # Freeze parameters of loaded model
-        for param in model.cov_mlp.parameters():
-            param.requires_grad = False
-
         print("Model state loaded for continuation.")
     else:
         # Initialize model and optimizer state.
         # If not continuing, set starting_epoch to 0.
         starting_epoch = 0
-        model = gaussian_policyCNN(**model_args)
+        model = DifferenceMVN.from_two_gaussian_checkpoints(
+            args.mvn_target_ckpt,
+            args.mvn_state_ckpt,
+            device=device,
+        )
+
         # Move model to GPU before instantiating optimizer and DDP.
         model.to(device)
 
-        # Freeze everything before handing to optimizer
-        for p in model.parameters():
-            p.requires_grad = False
-
-        # Define blocks we will successively unfreeze
-        blocks = [
-            ('mean head', lambda n: n.startswith('mean_mlp')),
-            ('vector MLP', lambda n: n.startswith('vector_mlp')),
-            ('h1 embed', lambda n: n.startswith('lin_embed_h1')),
-            ('h2 embed', lambda n: n.startswith('lin_embed_h2')),
-            ('CNN-H1 reduce', lambda n: n.startswith('reduceH1')),
-            ('CNN-H1 interp', lambda n: n.startswith('interpH1')),
-            ('CNN-H2 reduce', lambda n: n.startswith('reduceH2')),
-            ('CNN-H2 interp', lambda n: n.startswith('interpH2')),
-        ]
-
-        # Unfreeze only the mean MLP head
-        for name, matcher in blocks:
-            for n, p in model.named_parameters():
-                if matcher(n):
-                    p.requires_grad = True
-
-        # Set the base learning rate per-block
-        base_lr = 1e-2
-        param_groups = [
-            {"params": model.mean_mlp.parameters(), "lr": base_lr},
-            {"params": model.vector_mlp.parameters(), "lr": 2.0*base_lr},
-            {"params": model.lin_embed_h1.parameters(), "lr": 10.0*base_lr},
-            {"params": model.lin_embed_h2.parameters(), "lr": 10.0*base_lr},
-            {"params": model.reduceH1.parameters(), "lr": 5.0*base_lr},
-            {"params": model.interpH1.parameters(), "lr": 25.0*base_lr},
-            {"params": model.reduceH2.parameters(), "lr": 5.0*base_lr},
-            {"params": model.interpH2.parameters(), "lr": 25.0*base_lr},
-        ]
-
         # Instantiate optimizer and move state to GPU.
         optimizer = torch.optim.AdamW(
-            params=param_groups,
-            # [p for p in model.parameters() if p.requires_grad],
-            # lr=base_lr,
+            model.parameters(),
+            lr=1e-03,
             betas=(0.9, 0.999),
             eps=1e-08,
-            weight_decay=0.0  #0.01, zero weight decay for only mean_mlp
+            weight_decay=0.01,
         )
 
         for state in optimizer.state.values():
@@ -223,14 +199,12 @@ def main(
                 if isinstance(value, torch.Tensor):
                     state[key] = value.to(device)
 
-        # Double check which parameters are frozen
-        if rank == 0:
-            for name, p in model.named_parameters():
-                print(name, p.requires_grad)
-
-        # # Freeze covariance parameters
-        # for param in model.cov_mlp.parameters():
-        #     param.requires_grad = False
+    # Save model args
+    # The args to rebuild it later are the args of its two subnets:
+    diff_mvn_args = {
+        "mvn1_args": model.mvn1.__dict__.get("config", None),
+        "mvn2_args": model.mvn2.__dict__.get("config", None),
+        }
 
     #############################################
     # Initialize Loss
@@ -258,18 +232,18 @@ def main(
     #original_batchsize = 40.0  # 1 node, 4 gpus, 10 samples/gpu
     #ddp_anchor_lr = anchor_lr * lr_scale / original_batchsize
     #
-    # # For single node
-    # ddp_anchor_lr = anchor_lr
+    # For single node
+    ddp_anchor_lr = anchor_lr
 
-    # LRsched = CosineWithWarmupScheduler(
-    #     optimizer,
-    #     anchor_lr=ddp_anchor_lr,
-    #     terminal_steps=terminal_steps,
-    #     warmup_steps=warmup_steps,
-    #     num_cycles=num_cycles,
-    #     min_fraction=min_fraction,
-    #     last_epoch=last_epoch,
-    # )
+    LRsched = CosineWithWarmupScheduler(
+        optimizer,
+        anchor_lr=ddp_anchor_lr,
+        terminal_steps=terminal_steps,
+        warmup_steps=warmup_steps,
+        num_cycles=num_cycles,
+        min_fraction=min_fraction,
+        last_epoch=last_epoch,
+    )
 
     #############################################
     # Data Initialization (Distributed Dataloader)
@@ -279,14 +253,18 @@ def main(
         filelist=train_filelist,
         design_file=design_file,
         half_image=False,
-        field_list=["density_throw"]
+        field_list=["density_throw"],
+        include_time=True,
+        norm_file=args.norm_file,
     )
     val_dataset = LSC_hfield_policy_DataSet(
         args.LSC_NPZ_DIR,
         filelist=validation_filelist,
         design_file=design_file,
         half_image=False,
-        field_list=["density_throw"]
+        field_list=["density_throw"],
+        include_time=True,
+        norm_file=args.norm_file,
     )
 
     # NOTE: For DDP the batch_size is the per-GPU batch_size!!!
@@ -329,7 +307,7 @@ def main(
             startTime = time.time()
 
         # Train and Validate
-        train_lsc_policy_epoch(
+        train_diffMVN_policy_epoch(
             training_data=train_dataloader,
             validation_data=val_dataloader,
             num_train_batches=train_batches,
@@ -337,7 +315,7 @@ def main(
             model=model,
             optimizer=optimizer,
             loss_fn=loss_fn,
-            #LRsched=LRsched,
+            LRsched=LRsched,
             epochIDX=epochIDX,
             train_per_val=train_per_val,
             train_rcrd_filename=trn_rcrd_filename,
@@ -345,7 +323,6 @@ def main(
             device=device,
             rank=rank,
             world_size=world_size,
-            blocks=blocks,  # Temporary list of unfrozen blocks.
         )
 
         if TIME_EPOCH:
@@ -371,8 +348,8 @@ def main(
         optimizer,
         epochIDX,
         new_chkpt_path,
-        model_class=gaussian_policyCNN,
-        model_args=model_args
+        model_class=DifferenceMVN,
+        model_args=diff_mvn_args
     )
 
     if rank == 0:

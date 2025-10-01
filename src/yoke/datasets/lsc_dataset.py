@@ -349,7 +349,7 @@ class LSC_cntr2hfield_DataSet(Dataset):
         self.include_time = include_time
         self.hydro_fields = field_list
         self.norm_file = norm_file
-        
+
         # Create filelist
         with open(filelist) as f:
             self.filelist = [line.rstrip() for line in f]
@@ -394,24 +394,23 @@ class LSC_cntr2hfield_DataSet(Dataset):
             Bspline_min = norm_args['Bspline_min']
             Bspline_max = norm_args['Bspline_max']
             Bspline_rng = Bspline_max - Bspline_min
-            
+
             sim_key = LSCnpz2key(self.LSC_NPZ_DIR + filepath)
             Bspline_nodes = LSCcsv2bspline_pts(self.design_file, sim_key)
 
             Bspline_nodes = 2.0 * (Bspline_nodes - Bspline_min) / Bspline_rng - 1.0
-            
+
             if self.include_time:
                 Tmax = 25.0
-                
+
                 sim_time = npz["sim_time"]
-                sim_time = 2.0 * (sim_time / 25.0) - 1.0
-                
+                sim_time = 2.0 * (sim_time / Tmax) - 1.0
+
                 sim_params = np.append(Bspline_nodes, sim_time)
                 geom_params = torch.from_numpy(sim_params).to(torch.float32)
             else:
                 geom_params = torch.from_numpy(Bspline_nodes).to(torch.float32)
 
-            
         else:
             sim_key = LSCnpz2key(self.LSC_NPZ_DIR + filepath)
             Bspline_nodes = LSCcsv2bspline_pts(self.design_file, sim_key)
@@ -609,6 +608,10 @@ class LSC_hfield_policy_DataSet(Dataset):
                            of symmetry and half-images are returned instead.
         field_list (tuple[str, ...]): List of hydro-dynamic fields to include as channels
                                       in image.
+        include_time (bool): If True then time information is included in the output
+        norm_file (str | None): Filename of normalization file. Currently only
+                                normalizes the contour inputs and time, not the
+                                image.
 
     """
 
@@ -619,6 +622,8 @@ class LSC_hfield_policy_DataSet(Dataset):
         design_file: str,
         half_image: bool = True,
         field_list: tuple[str, ...] = ("density_throw",),
+        include_time: bool = False,
+        norm_file: str | None = None,
     ) -> None:
         """Initialization of class."""
         # Model Arguments
@@ -627,6 +632,8 @@ class LSC_hfield_policy_DataSet(Dataset):
         self.design_file = design_file
         self.half_image = half_image
         self.hydro_fields = field_list
+        self.include_time = include_time
+        self.norm_file = norm_file
 
         # Create filelist
         with open(filelist) as f:
@@ -690,16 +697,75 @@ class LSC_hfield_policy_DataSet(Dataset):
             torch.float32
         )
 
-        # Get the contour parameters
-        sim_key = LSCnpz2key(self.LSC_NPZ_DIR + state)
-        Bspline_nodes = LSCcsv2bspline_pts(self.design_file, sim_key)
-        state_geom_params = torch.from_numpy(Bspline_nodes).to(torch.float32)
+        # Get the contours and sim_time
+        # For state
+        if self.norm_file is not None:
+            norm_args = np.load(self.norm_file)
+            Bspline_min = norm_args['Bspline_min']
+            Bspline_max = norm_args['Bspline_max']
+            Bspline_rng = Bspline_max - Bspline_min
 
-        sim_key = LSCnpz2key(self.LSC_NPZ_DIR + target)
-        Bspline_nodes = LSCcsv2bspline_pts(self.design_file, sim_key)
-        target_geom_params = torch.from_numpy(Bspline_nodes).to(torch.float32)
+            sim_key = LSCnpz2key(self.LSC_NPZ_DIR + state)
+            Bspline_nodes = LSCcsv2bspline_pts(self.design_file, sim_key)
+
+            Bspline_nodes = 2.0 * (Bspline_nodes - Bspline_min) / Bspline_rng - 1.0
+
+            if self.include_time:
+                Tmax = 25.0
+
+                sim_time = state_npz["sim_time"]
+                sim_time = 2.0 * (sim_time / Tmax) - 1.0
+
+                sim_params = np.append(Bspline_nodes, sim_time)
+                state_geom_params = torch.from_numpy(sim_params).to(torch.float32)
+            else:
+                state_geom_params = torch.from_numpy(Bspline_nodes).to(torch.float32)
+        else:
+            sim_key = LSCnpz2key(self.LSC_NPZ_DIR + state)
+            Bspline_nodes = LSCcsv2bspline_pts(self.design_file, sim_key)
+            if self.include_time:
+                sim_time = state_npz["sim_time"]
+
+                sim_params = np.append(Bspline_nodes, sim_time)
+                state_geom_params = torch.from_numpy(sim_params).to(torch.float32)
+            else:
+                state_geom_params = torch.from_numpy(Bspline_nodes).to(torch.float32)
 
         state_npz.close()
+
+        # For target
+        if self.norm_file is not None:
+            norm_args = np.load(self.norm_file)
+            Bspline_min = norm_args['Bspline_min']
+            Bspline_max = norm_args['Bspline_max']
+            Bspline_rng = Bspline_max - Bspline_min
+
+            sim_key = LSCnpz2key(self.LSC_NPZ_DIR + target)
+            Bspline_nodes = LSCcsv2bspline_pts(self.design_file, sim_key)
+
+            Bspline_nodes = 2.0 * (Bspline_nodes - Bspline_min) / Bspline_rng - 1.0
+
+            if self.include_time:
+                Tmax = 25.0
+
+                sim_time = target_npz["sim_time"]
+                sim_time = 2.0 * (sim_time / Tmax) - 1.0
+
+                sim_params = np.append(Bspline_nodes, sim_time)
+                target_geom_params = torch.from_numpy(sim_params).to(torch.float32)
+            else:
+                target_geom_params = torch.from_numpy(Bspline_nodes).to(torch.float32)
+        else:
+            sim_key = LSCnpz2key(self.LSC_NPZ_DIR + target)
+            Bspline_nodes = LSCcsv2bspline_pts(self.design_file, sim_key)
+            if self.include_time:
+                sim_time = target_npz["sim_time"]
+
+                sim_params = np.append(Bspline_nodes, sim_time)
+                target_geom_params = torch.from_numpy(sim_params).to(torch.float32)
+            else:
+                target_geom_params = torch.from_numpy(Bspline_nodes).to(torch.float32)
+
         target_npz.close()
 
         # Calculate optimal policy step

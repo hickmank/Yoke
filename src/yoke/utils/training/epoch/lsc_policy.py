@@ -10,6 +10,8 @@ from typing import Optional
 from yoke.utils.training.datastep.lsc_policy import (
     train_lsc_policy_datastep,
     eval_lsc_policy_datastep,
+    train_diffMVN_policy_datastep,
+    eval_diffMVN_policy_datastep,
 )
 
 
@@ -172,3 +174,118 @@ def train_lsc_policy_epoch(
                             ]
                         )
                         np.savetxt(val_rcrd_file, batch_records, fmt="%d, %d, %.8f")
+
+
+def train_diffMVN_policy_epoch(
+    training_data: torch.utils.data.DataLoader,
+    validation_data: torch.utils.data.DataLoader,
+    num_train_batches: int,
+    num_val_batches: int,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    loss_fn: torch.nn.Module,
+    LRsched: torch.optim.lr_scheduler._LRScheduler,
+    epochIDX: int,
+    train_per_val: int,
+    train_rcrd_filename: str,
+    val_rcrd_filename: str,
+    device: torch.device,
+    rank: int,
+    world_size: int,
+) -> None:
+    """Epoch training of Gaussian-difference policy network.
+
+    Function to complete a training epoch on a policy network made up of the difference
+    of two multi-variate normal prediction networks. Training and validation information
+    is saved to successive CSV files.
+
+    Args:
+        training_data (torch.utils.data.DataLoader): training dataloader
+        validation_data (torch.utils.data.DataLoader): validation dataloader
+        num_train_batches (int): Number of batches in training epoch
+        num_val_batches (int): Number of batches in validation epoch
+        model (torch.nn.Module): model to train
+        optimizer (torch.optim.Optimizer): optimizer for training set
+        loss_fn (torch.nn.Module): loss function for training set
+        LRsched (torch.optim.lr_scheduler._LRScheduler): Learning-rate scheduler called
+                                                         every training step.
+        epochIDX (int): Index of current training epoch
+        train_per_val (int): Number of Training epochs between each validation
+        train_rcrd_filename (str): Name of CSV file to save training sample stats to
+        val_rcrd_filename (str): Name of CSV file to save validation sample stats to
+        device (torch.device): device index to select
+        rank (int): rank of process
+        world_size (int): number of total processes
+    """
+    # Initialize things to save
+    trainbatch_ID = 0
+    valbatch_ID = 0
+
+    # Training loop
+    model.train()
+    train_rcrd_filename = train_rcrd_filename.replace("<epochIDX>", f"{epochIDX:04d}")
+
+    with (
+        open(train_rcrd_filename, "a") if rank == 0 else nullcontext()
+    ) as train_rcrd_file:
+        # Iterate over training batches
+        for trainbatch_ID, traindata in enumerate(training_data):
+            # Stop when number of training batches is reached
+            if trainbatch_ID >= num_train_batches:
+                break
+
+            # Perform a single training step
+            diff_true, mean_diff, trn_losses, trn_nll = train_diffMVN_policy_datastep(
+                traindata, model, optimizer, loss_fn, device, rank, world_size,
+            )
+
+            # Increment the learning-rate scheduler
+            LRsched.step()
+
+            # Save training record (rank 0 only)
+            if rank == 0:
+                # Save training losses
+                batch_records = np.column_stack(
+                    [
+                        np.full(len(trn_losses), epochIDX),
+                        np.full(len(trn_losses), trainbatch_ID),
+                        trn_losses.cpu().numpy().flatten(),
+                        trn_nll.cpu().numpy().flatten(),
+                    ]
+                )
+                np.savetxt(train_rcrd_file, batch_records, fmt="%d, %d, %.8f, %.8f")
+
+    # Validation loop
+    if epochIDX % train_per_val == 0:
+        print("Validating...", epochIDX)
+        val_rcrd_filename = val_rcrd_filename.replace("<epochIDX>", f"{epochIDX:04d}")
+        model.eval()
+        with (
+            open(val_rcrd_filename, "a") if rank == 0 else nullcontext()
+        ) as val_rcrd_file:
+            with torch.no_grad():
+                for valbatch_ID, valdata in enumerate(validation_data):
+                    # Stop when number of training batches is reached
+                    if valbatch_ID >= num_val_batches:
+                        break
+
+                    eval_diff = eval_diffMVN_policy_datastep(
+                        traindata, model, optimizer, loss_fn, device, rank, world_size,
+                    )
+                    diff_true, mean_diff, val_losses, val_nll = eval_diff
+
+                    # Save validation record (rank 0 only)
+                    if rank == 0:
+                        batch_records = np.column_stack(
+                            [
+                                np.full(len(val_losses), epochIDX),
+                                np.full(len(val_losses), valbatch_ID),
+                                val_losses.cpu().numpy().flatten(),
+                                val_nll.cpu().numpy().flatten(),
+                            ]
+                        )
+                        np.savetxt(
+                            val_rcrd_file,
+                            batch_records,
+                            fmt="%d, %d, %.8f, %.8f",
+                            )
