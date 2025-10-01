@@ -10,11 +10,11 @@
 # The following are one set of SBATCH options for the Venado GPU
 # partition. There are optional other constraints.
 
-#SBATCH --job-name=lscpolicy_s<studyIDX>_e0001
+#SBATCH --job-name=policy_s<studyIDX>_e0001
 #SBATCH --account=w25_artimis_g
 #PRODUCTION  #SBATCH --partition=gpu
 #PRODUCTION  #SBATCH --time=02:00:00
-#SBATCH --time=0:45:00
+#SBATCH --time=02:00:00
 #SBATCH --qos=debug
 #SBATCH --reservation=gpu_debug
 #SBATCH --partition=gpu_debug
@@ -25,7 +25,6 @@
 #SBATCH --output=study<studyIDX>_epoch0001.out
 #SBATCH --error=study<studyIDX>_epoch0001.err
 #SBATCH -vvv
-
 
 # Set the master node's address and port
 MASTER_ADDR=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)

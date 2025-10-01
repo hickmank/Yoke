@@ -238,7 +238,7 @@ def eval_diffMVN_policy_datastep(
 
     # Forward pass
     with torch.no_grad():
-        pred_distribution = model(stateH, targetH)
+        pred_distribution = model(targetH, stateH)
 
     mean_diff = pred_distribution.mean
 
