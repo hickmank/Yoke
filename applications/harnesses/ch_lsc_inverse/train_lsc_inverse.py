@@ -1,4 +1,4 @@
-"""Train a Gaussian Policy network using DDP."""
+"""Train a deterministic Image-to-Vector inverse network using DDP."""
 
 import os
 import time

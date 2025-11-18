@@ -1,4 +1,8 @@
-"""Train a Gaussian Policy network using DDP."""
+"""Fine-tune an Image-to-Vector Gaussian Policy network using DDP.
+
+It is assumed a network has been trained to optimize the predictive mean. This script now
+fine-tunes the covariance estimation only to optimize negative log-likelihood.
+"""
 
 import os
 import time
@@ -23,7 +27,7 @@ from yoke.helpers import cli
 # Inputs
 #############################################
 descr_str = (
-    "Uses DDP to train gaussian parameter-estimation CNN."
+    "Uses DDP to fine-tune covariance estimation in a gaussian parameter-estimation CNN."
 )
 parser = argparse.ArgumentParser(
     prog="Fine-tune LSC Gaussian Inverse with Neg-loglik.",
@@ -45,35 +49,11 @@ parser.add_argument(
 )
 
 parser.add_argument(
-    "--size_threshold",
+    "--pretrain_checkpoint",
     action="store",
-    type=int,
-    default=12,
-    help="Threshold to reduce CNN output image (default: 12).",
-)
-
-parser.add_argument(
-    "--features",
-    action="store",
-    type=int,
-    default=32,
-    help="Number of neurons in each CNN layer (default: 32).",
-)
-
-parser.add_argument(
-    "--interp_depth",
-    action="store",
-    type=int,
-    default=20,
-    help="Number of interpretability layers prior to reduction (default: 20).",
-)
-
-parser.add_argument(
-    "--hidden_features",
-    action="store",
-    type=int,
-    default=32,
-    help="Number of neurons in layers of final MLPs (default: 32).",
+    type=str,
+    default="./gaussian_inverse_pretrain.pth",
+    help="Yoke checkpoint for a pre-trained gaussian inverse network.",
 )
 
 
@@ -165,28 +145,16 @@ def main(
     train_per_val = args.TRAIN_PER_VAL
     trn_rcrd_filename = args.trn_rcrd_filename
     val_rcrd_filename = args.val_rcrd_filename
+
+    # Since we are fine-tuning for covariance we assume there is always a starting 
+    # checkpoint.
+    pretrain_chkpt = args.pretrain_checkpoint
     CONTINUATION = args.continuation
     checkpoint = args.checkpoint
 
     # Dictionary of available models.
     available_models = {
         "gaussian_Image2VectorCNN": gaussian_Image2VectorCNN
-    }
-
-    #################################################
-    # Model Arguments for Inverse Geometry Estimation
-    #################################################
-    model_args = {
-        "img_size": (1, 1120, 800),
-        "output_dim": 29,
-        "size_threshold": (size_threshold, size_threshold),
-        "kernel": 3,
-        "features": features,
-        "interp_depth": interp_depth,
-        "conv_onlyweights": True,
-        "batchnorm_onlybias": True,
-        "hidden_features": hidden_features,
-        "final_activation": nn.Identity,
     }
 
     #############################################
@@ -214,30 +182,24 @@ def main(
 
         print("Model state loaded for continuation.")
     else:
-        # Initialize model and optimizer state.
-        # If not continuing, set starting_epoch to 0.
-        starting_epoch = 0
-        model = gaussian_Image2VectorCNN(**model_args)
-        # Move model to GPU before instantiating optimizer and DDP.
-        model.to(device)
-
-        # Instantiate optimizer and move state to GPU.
-        optimizer = torch.optim.AdamW(
-            model.parameters(),
-            lr=1e-3,  # Initial learning rate
-            betas=(0.9, 0.999),
-            eps=1e-08,
-            weight_decay=0.0  #0.01, zero weight decay for only mean_mlp
+        # Load pre-training checkpoint
+        model, optimizer, starting_epoch = load_model_and_optimizer(
+            pretrain_chkpt,
+            optimizer_class=torch.optim.AdamW,
+            optimizer_kwargs={
+                "lr": 1e-3,
+                "betas": (0.9, 0.999),
+                "eps": 1e-08,
+                "weight_decay": 0.0, # 0.01, zero weight decay for only mean_mlp
+            },
+            available_models=available_models,
+            device=device,
         )
 
         # Freeze parameters of loaded model
         for param in model.cov_mlp.parameters():
             param.requires_grad = False
 
-        for state in optimizer.state.values():
-            for key, value in state.items():
-                if isinstance(value, torch.Tensor):
-                    state[key] = value.to(device)
 
     #############################################
     # Initialize Loss

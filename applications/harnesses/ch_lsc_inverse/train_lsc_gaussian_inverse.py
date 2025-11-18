@@ -1,4 +1,4 @@
-"""Train a Gaussian Policy network using DDP."""
+"""Pre-Train only the mean of an inverse Gaussian network using DDP."""
 
 import os
 import time
@@ -23,10 +23,12 @@ from yoke.helpers import cli
 # Inputs
 #############################################
 descr_str = (
-    "Uses DDP to train gaussian parameter-estimation CNN."
+    "Uses DDP to pre-train a gaussian Image-to-Vector parameter-estimation CNN. "
+    "Only the mean is trained to minimize predictive MSE. NegLogLik fine-tuning "
+    "is expected to follow to train covariance estimation."
 )
 parser = argparse.ArgumentParser(
-    prog="LSC Gaussian Inverse Training",
+    prog="LSC Gaussian-Mean Inverse Pre-Training",
     description=descr_str,
     fromfile_prefix_chars="@"
 )
