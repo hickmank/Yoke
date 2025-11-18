@@ -14,7 +14,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 from yoke.models.policyCNNmodules import gaussian_Image2VectorCNN
 from yoke.datasets.lsc_dataset import LSC_hfield2cntr_DataSet
-from yoke.utils.training.epoch.lsc_gaussian import train_lsc_gaussian_epoch
+from yoke.utils.training.epoch.lsc_gaussian import train_lsc_NLL_epoch
 from yoke.utils.restart import continuation_setup
 from yoke.utils.dataload import make_distributed_dataloader
 from yoke.utils.checkpointing import load_model_and_optimizer
@@ -118,12 +118,6 @@ def main(
     validation_filelist = args.FILELIST_DIR + args.validation_filelist
     norm_file = args.norm_file
 
-    # Model architecture parameters
-    size_threshold = args.size_threshold
-    features = args.features
-    interp_depth = args.interp_depth
-    hidden_features = args.hidden_features
-
     # LR-schedule Parameters
     anchor_lr = args.anchor_lr
     num_cycles = args.num_cycles
@@ -176,6 +170,22 @@ def main(
             device=device,
         )
 
+        #################################################
+        # Model Arguments for Inverse Geometry Estimation
+        #################################################
+        model_args = {
+            "img_size": model.i2v_cnn.img_size,
+            "output_dim": model.i2v_cnn.output_dim,
+            "size_threshold": model.i2v_cnn.size_threshold,
+            "kernel": model.i2v_cnn.kernel,
+            "features": model.i2v_cnn.features,
+            "interp_depth": model.i2v_cnn.interp_depth,
+            "conv_onlyweights": True,
+            "batchnorm_onlybias": True,
+            "hidden_features": model.i2v_cnn.hidden_features,
+            "final_activation": nn.Identity,
+        }
+
         # Freeze parameters of loaded model
         for param in model.cov_mlp.parameters():
             param.requires_grad = False
@@ -195,6 +205,22 @@ def main(
             available_models=available_models,
             device=device,
         )
+
+        #################################################
+        # Model Arguments for Inverse Geometry Estimation
+        #################################################
+        model_args = {
+            "img_size": model.i2v_cnn.img_size,
+            "output_dim": model.i2v_cnn.output_dim,
+            "size_threshold": model.i2v_cnn.size_threshold,
+            "kernel": model.i2v_cnn.kernel,
+            "features": model.i2v_cnn.features,
+            "interp_depth": model.i2v_cnn.interp_depth,
+            "conv_onlyweights": True,
+            "batchnorm_onlybias": True,
+            "hidden_features": model.i2v_cnn.hidden_features,
+            "final_activation": nn.Identity,
+        }
 
         # Freeze parameters of loaded model
         for param in model.cov_mlp.parameters():
@@ -302,7 +328,7 @@ def main(
             startTime = time.time()
 
         # Train and Validate
-        train_lsc_gaussian_epoch(
+        train_lsc_NLL_epoch(
             training_data=train_dataloader,
             validation_data=val_dataloader,
             num_train_batches=train_batches,
