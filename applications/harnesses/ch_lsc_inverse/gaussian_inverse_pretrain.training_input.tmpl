@@ -16,8 +16,14 @@ design_lsc240420_MASTER.csv
 ./training_study<studyIDX>_epoch<epochIDX>.csv
 --val_rcrd_filename
 ./validation_study<studyIDX>_epoch<epochIDX>.csv
---pretrain_checkpoint
-./gaussian_inverse_pretrain.pth
+--size_threshold
+<SIZE_THRESHOLD>
+--features
+<FEATURES>
+--interp_depth
+<INTERP_DEPTH>
+--hidden_features
+<HIDDEN_FEATURES>
 --anchor_lr
 <ANCHOR_LR>
 --num_cycles
@@ -42,3 +48,6 @@ design_lsc240420_MASTER.csv
 <NVAL_BATCH>
 --TRAIN_PER_VAL
 5
+--continuation
+--checkpoint
+<CHECKPOINT>

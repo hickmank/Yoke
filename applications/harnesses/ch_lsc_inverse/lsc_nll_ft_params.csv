@@ -1,0 +1,6 @@
+studyIDX,KNODES,NGPUS,NUM_WORKERS,BATCH_SIZE,NTRN_BATCH,NVAL_BATCH,ANCHOR_LR,NUM_CYCLES,MIN_FRACTION,TERMINAL_STEPS,WARMUP_STEPS,train_script
+# Train predictive gaussian inverse map
+# Approx. 25min/epoch for some reason even batchsize of 8 is too large to be stable.
+# OOM error for FEATURES = 64
+# Fine tune covariance with nll minimization
+1,1,4,2,4,1500,500,1.0e-3,0.5,0.5,1000,500,ft_lsc_nll_inverse.py
