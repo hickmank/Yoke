@@ -152,7 +152,7 @@ def train_lsc_NLL_datastep(
 
     # Ensure the mean estimation part of the model is still in evaluation mode so that
     # the BatchNorm statistics are not affected.
-    model.i2v_cnn.eval()
+    model.module.i2v_cnn.eval()
 
     # Extract data
     Hfield, x_true = data
