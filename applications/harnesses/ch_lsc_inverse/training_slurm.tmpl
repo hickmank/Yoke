@@ -46,7 +46,7 @@ export NCCL_SOCKET_IFNAME=hsn0  # Check possible interfaces with `ip link show`
 
 # Load correct conda environment
 module load cray-python
-source $HOME/yoke_250724/bin/activate
+source $HOME/yoke_251119/bin/activate
 
 # Set number of threads per GPU
 export OMP_NUM_THREADS=10
