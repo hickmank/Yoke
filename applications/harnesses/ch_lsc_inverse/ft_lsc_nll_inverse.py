@@ -187,7 +187,7 @@ def main(
         }
 
         # Freeze parameters of loaded model
-        for param in model.cov_mlp.parameters():
+        for param in model.i2v_cnn.parameters():
             param.requires_grad = False
 
         print("Model state loaded for continuation.")
@@ -223,7 +223,7 @@ def main(
         }
 
         # Freeze parameters of loaded model
-        for param in model.cov_mlp.parameters():
+        for param in model.i2v_cnn.parameters():
             param.requires_grad = False
 
 

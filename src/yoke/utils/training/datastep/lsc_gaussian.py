@@ -150,6 +150,10 @@ def train_lsc_NLL_datastep(
     # Set model to train mode
     model.train()
 
+    # Ensure the mean estimation part of the model is still in evaluation mode so that
+    # the BatchNorm statistics are not affected.
+    model.i2v_cnn.eval()
+
     # Extract data
     Hfield, x_true = data
     Hfield = Hfield.to(device, non_blocking=True)
