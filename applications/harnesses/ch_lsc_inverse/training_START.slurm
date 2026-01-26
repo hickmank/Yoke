@@ -11,7 +11,7 @@
 # partition. There are optional other constraints.
 
 #SBATCH --job-name=inverse_s<studyIDX>_e0001
-#SBATCH --account=w25_artimis_g
+#SBATCH --account=y26_artimis-fmod_g
 #PRODUCTION  #SBATCH --partition=gpu
 #PRODUCTION  #SBATCH --time=02:00:00
 #SBATCH --time=02:00:00
