@@ -88,6 +88,14 @@ parser.add_argument(
 )
 
 parser.add_argument(
+    "--ylow",
+    action="store",
+    type=float,
+    default=0.0,
+    help="Lower y-axis limit for plot.",
+)
+
+parser.add_argument(
     "--inprogress",
     "-P",
     action="store_true",
@@ -109,6 +117,7 @@ args_ns = parser.parse_args()
 basedir = args_ns.basedir
 IDX = args_ns.IDX
 YLIM = args_ns.ylim
+YLOW = args_ns.ylow
 INPROGRESS = args_ns.inprogress
 savedir = args_ns.savedir
 SAVEFIG = args_ns.savefig
@@ -219,7 +228,7 @@ for tIDX, Tcsv in enumerate(trn_csv_list):
 plt.legend(fontsize=16)
 
 # No xlim
-ax.set_ylim(0.0, YLIM)
+ax.set_ylim(YLOW, YLIM)
 
 # Set axis labels
 ax.set_ylabel("Loss", fontsize=16)
