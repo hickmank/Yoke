@@ -14,7 +14,7 @@ from yoke.utils.restart import continuation_setup
 from yoke.utils.dataload import make_distributed_dataloader
 from yoke.utils.checkpointing import load_model_and_optimizer
 from yoke.utils.checkpointing import save_model_and_optimizer
-from yoke.lr_schedulers import CosineWithWarmupScheduler
+from yoke.lr_schedulers import ConstantWithWarmupScheduler
 from yoke.helpers import cli
 
 
@@ -107,13 +107,6 @@ def main(args, rank, world_size, local_rank, device):
     # Model Parameters
     embed_dim = args.embed_dim
     block_structure = tuple(args.block_structure)
-
-    # Training Parameters
-    anchor_lr = args.anchor_lr
-    num_cycles = args.num_cycles
-    min_fraction = args.min_fraction
-    terminal_steps = args.terminal_steps
-    warmup_steps = args.warmup_steps
 
     # Number of workers controls how batches of data are prefetched and,
     # possibly, pre-loaded onto GPUs. If the number of workers is large they
@@ -257,7 +250,7 @@ def main(args, rank, world_size, local_rank, device):
             checkpoint,
             optimizer_class=torch.optim.AdamW,
             optimizer_kwargs={
-                "lr": 1e-6,
+                "lr": 1e-4,
                 "betas": (0.9, 0.999),
                 "eps": 1e-08,
                 "weight_decay": 0.01,
@@ -277,7 +270,7 @@ def main(args, rank, world_size, local_rank, device):
         # Instantiate optimizer and move state to GPU.
         optimizer = torch.optim.AdamW(
             model.parameters(),
-            lr=1e-6,
+            lr=1e-4,
             betas=(0.9, 0.999),
             eps=1e-08,
             weight_decay=0.01
@@ -308,23 +301,10 @@ def main(args, rank, world_size, local_rank, device):
     else:
         last_epoch = train_batches * (starting_epoch - 1)
 
-    # Scale the anchor LR by global batchsize
-    #
-    # # For multi-node
-    lr_scale = np.sqrt(float(Ngpus) * float(Knodes) * float(batch_size))
-    original_batchsize = 40.0  # 1 node, 4 gpus, 10 samples/gpu
-    ddp_anchor_lr = anchor_lr * lr_scale / original_batchsize
-    #
-    # For single node
-    # ddp_anchor_lr = anchor_lr
-
-    LRsched = CosineWithWarmupScheduler(
+    LRsched = ConstantWithWarmupScheduler(
         optimizer,
-        anchor_lr=ddp_anchor_lr,
-        terminal_steps=terminal_steps,
-        warmup_steps=warmup_steps,
-        num_cycles=num_cycles,
-        min_fraction=min_fraction,
+        warmup_steps=0,
+        lr_constant=1e-4,
         last_epoch=last_epoch,
     )
 
@@ -334,14 +314,14 @@ def main(args, rank, world_size, local_rank, device):
     train_dataset = LSC_rho2rho_temporal_DataSet(
         args.LSC_NPZ_DIR,
         file_prefix_list=train_filelist,
-        max_timeIDX_offset=2,
+        max_timeIDX_offset=1,
         max_file_checks=10,
         half_image=True,
     )
     val_dataset = LSC_rho2rho_temporal_DataSet(
         args.LSC_NPZ_DIR,
         file_prefix_list=validation_filelist,
-        max_timeIDX_offset=2,
+        max_timeIDX_offset=1,
         max_file_checks=10,
         half_image=True,
     )
