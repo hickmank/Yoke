@@ -7,8 +7,8 @@ studyIDX,KNODES,NGPUS,EMBED_DIM,B0,B1,B2,B3,NUM_WORKERS,BATCH_SIZE,NTRN_BATCH,NV
 # FTherm_PLI_big_DT1
 3,1,4,128,1,1,9,1,2,10,1000,500,train_LodeRunner_ddp.py
 # FTherm_PLI_large_DT1
-3,1,4,192,1,1,9,1,2,10,1000,500,train_LodeRunner_ddp.py
+4,1,4,192,1,1,9,1,2,10,1000,500,train_LodeRunner_ddp.py
 # FTherm_PLI_huge_DT1
-3,1,4,352,1,1,9,1,2,10,1000,500,train_LodeRunner_ddp.py
+5,1,4,352,1,1,9,1,2,10,1000,500,train_LodeRunner_ddp.py
 # FTherm_PLI_giant_DT1
-3,1,4,512,1,1,11,2,2,10,1000,500,train_LodeRunner_ddp.py
+6,1,4,512,1,1,11,2,2,10,1000,500,train_LodeRunner_ddp.py
