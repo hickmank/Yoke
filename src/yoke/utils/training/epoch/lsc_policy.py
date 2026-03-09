@@ -5,7 +5,6 @@ import torch
 import numpy as np
 from contextlib import nullcontext
 from collections.abc import Callable
-from typing import Optional
 
 from yoke.utils.training.datastep.lsc_policy import (
     train_lsc_policy_datastep,
@@ -31,7 +30,7 @@ def train_lsc_policy_epoch(
     device: torch.device,
     rank: int,
     world_size: int,
-    blocks: Optional[list[tuple[str, Callable[[str], bool]]]] = None,
+    blocks: list[tuple[str, Callable[[str], bool]]] | None = None,
 ) -> None:
     """Epoch training of LSC Gaussian-policy network.
 
@@ -74,10 +73,13 @@ def train_lsc_policy_epoch(
         grad_rcrd_filename = train_rcrd_filename.replace(".csv", "_grad.csv")
 
     with (
-        open(train_rcrd_filename, "a") if rank == 0 else nullcontext()
-    ) as train_rcrd_file, (
-        open(grad_rcrd_filename, "a") if (rank == 0 and BLOCK_CND) else nullcontext()
-    ) as grad_rcrd_file:
+        (
+            open(train_rcrd_filename, "a") if rank == 0 else nullcontext()
+        ) as train_rcrd_file,
+        (
+            open(grad_rcrd_filename, "a") if (rank == 0 and BLOCK_CND) else nullcontext()
+        ) as grad_rcrd_file,
+    ):
         # Write header to training record file (rank 0 only)
         if rank == 0:
             trn_header = ["epoch", "batch", "loss"]
@@ -97,7 +99,13 @@ def train_lsc_policy_epoch(
 
             # Perform a single training step
             x_true, pred_mean, train_losses = train_lsc_policy_datastep(
-                traindata, model, optimizer, loss_fn, device, rank, world_size,
+                traindata,
+                model,
+                optimizer,
+                loss_fn,
+                device,
+                rank,
+                world_size,
             )
 
             # Increment the learning-rate scheduler
@@ -124,10 +132,9 @@ def train_lsc_policy_epoch(
                         rms_list.append(rms)
 
                     # build a (1, N) array so numpy.savetxt writes a single row
-                    row = np.array(
-                        [epochIDX, trainbatch_ID] + rms_list,
-                        dtype=float
-                        )[None, :]
+                    row = np.array([epochIDX, trainbatch_ID] + rms_list, dtype=float)[
+                        None, :
+                    ]
                     fmt = ["%d", "%d"] + ["%.10f"] * len(rms_list)
                     np.savetxt(grad_rcrd_file, row, fmt=fmt, delimiter=",")
 
