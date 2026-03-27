@@ -14,10 +14,12 @@
 #SBATCH --account=y26_artimis-fmod_g
 #PRODUCTION  #SBATCH --partition=gpu
 #PRODUCTION  #SBATCH --time=16:00:00
+#SBATCH --partition=gpu
 #SBATCH --time=1:00:00
-#SBATCH --qos=debug
-#SBATCH --reservation=gpu_debug
-#SBATCH --partition=gpu_debug
+#DEBUG  #SBATCH --time=1:00:00
+#DEBUG  #SBATCH --qos=debug
+#DEBUG  #SBATCH --reservation=gpu_debug
+#DEBUG  #SBATCH --partition=gpu_debug
 #SBATCH --nodes=<KNODES>
 #SBATCH --ntasks-per-node=<NGPUS>
 #SBATCH --gpus-per-node=<NGPUS>
