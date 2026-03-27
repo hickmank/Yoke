@@ -113,6 +113,20 @@ def add_filepath_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
         help="Directory in which LSC *.npz files live.",
     )
     parser.add_argument(
+        "--NPZ_DIR",
+        action="store",
+        type=str,
+        default=os.path.join(YOKE_PATH, "data_examples/cx241203_fp16_half/"),
+        help="Directory in which CX *.npz files live.",
+    )
+    parser.add_argument(
+        "--CSV_FILEPATH",
+        action="store",
+        type=str,
+        default=os.path.join(YOKE_PATH, "data_examples/design_cx241203_MASTER.csv"),
+        help="Filepath to CX csv file.",
+    )
+    parser.add_argument(
         "--NC_NPZ_DIR",
         action="store",
         type=str,
@@ -269,6 +283,13 @@ def add_training_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
         help="Number of batches to validate on in a given epoch",
     )
     parser.add_argument(
+        "--test_batches",
+        action="store",
+        type=int,
+        default=0,
+        help="Number of batches to evaluate on a test set in a given epoch",
+    )
+    parser.add_argument(
         "--TRAIN_PER_VAL",
         action="store",
         type=int,
@@ -288,6 +309,13 @@ def add_training_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
         type=str,
         default="./default_validation.csv",
         help="Filename for text file of validation loss and metrics on each batch",
+    )
+    parser.add_argument(
+        "--test_rcrd_filename",
+        action="store",
+        type=str,
+        default="./default_testing.csv",
+        help="Filename for text file of test evaluation loss and metrics on each batch",
     )
     parser.add_argument(
         "--continuation",
