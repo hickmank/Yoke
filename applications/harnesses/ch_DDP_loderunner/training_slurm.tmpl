@@ -15,7 +15,7 @@
 #PRODUCTION  #SBATCH --partition=gpu
 #PRODUCTION  #SBATCH --time=16:00:00
 #SBATCH --partition=gpu
-#SBATCH --time=1:00:00
+#SBATCH --time=2:00:00
 #DEBUG  #SBATCH --time=1:00:00
 #DEBUG  #SBATCH --qos=debug
 #DEBUG  #SBATCH --reservation=gpu_debug
