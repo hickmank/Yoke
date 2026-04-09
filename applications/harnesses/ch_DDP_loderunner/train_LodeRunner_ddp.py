@@ -43,7 +43,6 @@ parser.add_argument(
     help="Relative magnitude for Gaussian noise injection (e.g. 5e-5).",
 )
 
-# 
 parser.add_argument(
     "--max_timeIDX_offset",
     type=int,
@@ -118,7 +117,7 @@ def main(args, rank, world_size, local_rank, device):
 
     # Training parameters
     max_timeIDX_offset = args.max_timeIDX_offset
-    
+
     # Number of workers controls how batches of data are prefetched and,
     # possibly, pre-loaded onto GPUs. If the number of workers is large they
     # will swamp memory and jobs will fail.
