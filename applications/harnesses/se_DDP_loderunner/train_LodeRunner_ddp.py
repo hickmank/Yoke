@@ -43,6 +43,13 @@ parser.add_argument(
     help="Relative magnitude ε for Gaussian noise injection (e.g. 5e-5).",
 )
 
+parser.add_argument(
+    "--max_timeIDX_offset",
+    type=int,
+    default=1,
+    help="Maximum time offset for input/output image pairs.",
+)
+
 # Change some default filepaths.
 parser.set_defaults(
     train_filelist="lsc240420_prefixes_train_80pct.txt",
