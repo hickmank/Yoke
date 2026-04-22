@@ -386,7 +386,7 @@ def main(args, rank, world_size, local_rank, device):
             num_train_batches=train_batches,
             num_val_batches=val_batches,
             model=model,
-            channel_map=list(len(channel_list)),
+            channel_map=list(range(len(channel_list))),
             optimizer=optimizer,
             loss_fn=loss_fn,
             LRsched=LRsched,
