@@ -416,7 +416,7 @@ def train_DDP_loderunner_epoch(
 
             # Training
             truth, pred, train_losses = train_fn(
-                traindata, model, optimizer, loss_fn, channel_map, device, rank, world_size
+                traindata, model, optimizer, loss_fn, device, rank, world_size, channel_map,
             )
 
             # Increment the learning-rate scheduler
@@ -451,10 +451,10 @@ def train_DDP_loderunner_epoch(
                         valdata,
                         model,
                         loss_fn,
-                        channel_map,
                         device,
                         rank,
-                        world_size
+                        world_size,
+                        channel_map,
                     )
 
                     # Save validation record (rank 0 only)

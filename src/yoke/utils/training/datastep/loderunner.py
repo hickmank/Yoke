@@ -166,10 +166,10 @@ def train_DDP_loderunner_datastep(
     model: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
     loss_fn: torch.nn.Module,
-    channel_map: list[int] = [0, 1, 2, 3, 4, 5, 6, 7],
     device: torch.device,
     rank: int,
     world_size: int,
+    channel_map: list[int] = [0, 1, 2, 3, 4, 5, 6, 7],
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """A DDP-compatible training step for multi-input, multi-output data.
 
@@ -487,10 +487,10 @@ def eval_DDP_loderunner_datastep(
     data: tuple,
     model: torch.nn.Module,
     loss_fn: torch.nn.Module,
-    channel_map: list[int] = [0, 1, 2, 3, 4, 5, 6, 7],
     device: torch.device,
     rank: int,
     world_size: int,
+    channel_map: list[int] = [0, 1, 2, 3, 4, 5, 6, 7],
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """A DDP-compatible evaluation step.
 
