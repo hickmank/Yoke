@@ -215,30 +215,32 @@ def main(args, rank, world_size, local_rank, device):
     #     'Zcoord',
     # ]
 
+    channel_list = [
+        'density_case',
+        'energy_case',
+        'pressure_case',
+        'density_cushion',
+        'energy_cushion',
+        'pressure_cushion',
+        'density_maincharge',
+        'energy_maincharge',
+        'pressure_maincharge',
+        'density_outside_air',
+        'energy_outside_air',
+        'pressure_outside_air',
+        'density_striker',
+        'energy_striker',
+        'pressure_striker',
+        'density_throw',
+        'energy_throw',
+        'pressure_throw',
+        'Uvelocity',
+        'Wvelocity',
+    ]
+
     # Model arguments for LodeRunner.
     model_args = {
-        "default_vars": [
-            'density_case',
-            'energy_case',
-            'pressure_case',
-            'density_cushion',
-            'energy_cushion',
-            'pressure_cushion',
-            'density_maincharge',
-            'energy_maincharge',
-            'pressure_maincharge',
-            'density_outside_air',
-            'energy_outside_air',
-            'pressure_outside_air',
-            'density_striker',
-            'energy_striker',
-            'pressure_striker',
-            'density_throw',
-            'energy_throw',
-            'pressure_throw',
-            'Uvelocity',
-            'Wvelocity',
-        ],
+        "default_vars": channel_list,
         "image_size": (1120, 400),
         "patch_size": (5, 5),
         "embed_dim": embed_dim,
@@ -326,6 +328,7 @@ def main(args, rank, world_size, local_rank, device):
         file_prefix_list=train_filelist,
         max_timeIDX_offset=max_timeIDX_offset,
         max_file_checks=10,
+        hydro_fields=np.array(channel_list),
         half_image=True,
     )
     val_dataset = LSC_rho2rho_temporal_DataSet(
@@ -333,6 +336,7 @@ def main(args, rank, world_size, local_rank, device):
         file_prefix_list=validation_filelist,
         max_timeIDX_offset=max_timeIDX_offset,
         max_file_checks=10,
+        hydro_fields=np.array(channel_list),
         half_image=True,
     )
 
@@ -382,6 +386,7 @@ def main(args, rank, world_size, local_rank, device):
             num_train_batches=train_batches,
             num_val_batches=val_batches,
             model=model,
+            channel_map=list(range(len(channel_list))),
             optimizer=optimizer,
             loss_fn=loss_fn,
             LRsched=LRsched,
