@@ -897,23 +897,18 @@ class SequentialDataSet(Dataset[_SequentialSample]):
         # Build valid sequence list
         #
         self.path_to_cache = path_to_cache
-        if (self.path_to_cache is None) or (
-            not os.path.exists(self.path_to_cache)
-        ):
-
+        if (self.path_to_cache is None) or (not os.path.exists(self.path_to_cache)):
             with open(file_prefix_list, encoding="utf-8") as f:
                 self.file_prefix_list = [line.rstrip() for line in f]
 
             self.rng.shuffle(self.file_prefix_list)
-        
+
             #
             # Find all NPZ files
             #
             all_files = []
             for prefix in self.file_prefix_list:
-                for fpath in glob.glob(
-                    os.path.join(npz_dir, f"{prefix}*.npz")
-                ):
+                for fpath in glob.glob(os.path.join(npz_dir, f"{prefix}*.npz")):
                     all_files.append((prefix, fpath))
 
             #
@@ -923,18 +918,18 @@ class SequentialDataSet(Dataset[_SequentialSample]):
                 int(re.search(file[0] + r"_pvi_idx(?P<idx>\d*).npz", file[1])["idx"])
                 for file in all_files
             ]
-            
+
             #
             # Allow all offsets if None
             #
             if timeIDX_offset is None:
                 max_dt = max(time_inds) - min(time_inds)
-                timeIDX_offset = list(
-                    range(-max_dt, max_dt + 1)
-                )
+                timeIDX_offset = list(range(-max_dt, max_dt + 1))
 
             timeIDX_offset = (
-                [timeIDX_offset] if isinstance(timeIDX_offset, int) else list(timeIDX_offset)
+                [timeIDX_offset]
+                if isinstance(timeIDX_offset, int)
+                else list(timeIDX_offset)
             )
 
             #
@@ -954,20 +949,13 @@ class SequentialDataSet(Dataset[_SequentialSample]):
                     valid_inds_curr = [start_idx]
 
                     for t in range(1, seq_len):
-
                         next_file = os.path.join(
                             self.npz_dir,
-                            (
-                                f"{file[0]}"
-                                f"_pvi_idx"
-                                f"{start_idx + t * dt:05d}.npz"
-                            ),
+                            (f"{file[0]}_pvi_idx{start_idx + t * dt:05d}.npz"),
                         )
 
                         if os.path.exists(next_file):
-                            valid_inds_curr.append(
-                                start_idx + t * dt
-                            )
+                            valid_inds_curr.append(start_idx + t * dt)
                         else:
                             break
 
@@ -991,15 +979,23 @@ class SequentialDataSet(Dataset[_SequentialSample]):
             # Count the number of valid sequences in the cache.
             try:
                 import h5py
+
                 with h5py.File(self.path_to_cache, "r") as f:
                     self.Nsamples = len(f["valid_prefix"])
             except ImportError:
                 LOGGER.warning("h5py not available; caching disabled")
                 self.path_to_cache = None
                 self.__init__(
-                    npz_dir, csv_filepath, file_prefix_list, seq_len,
-                    timeIDX_offset, half_image, kinematic_variables,
-                    thermodynamic_variables, transform, None
+                    npz_dir,
+                    csv_filepath,
+                    file_prefix_list,
+                    seq_len,
+                    timeIDX_offset,
+                    half_image,
+                    kinematic_variables,
+                    thermodynamic_variables,
+                    transform,
+                    None,
                 )
                 return
 
@@ -1009,12 +1005,10 @@ class SequentialDataSet(Dataset[_SequentialSample]):
         valid_prefix = np.array(valid_prefix, dtype=object)
         valid_inds = np.array(valid_inds, dtype=np.int32)
 
-        if (
-            self.path_to_cache is not None
-            and not os.path.exists(self.path_to_cache)
-        ):
+        if self.path_to_cache is not None and not os.path.exists(self.path_to_cache):
             try:
                 import h5py
+
                 with h5py.File(self.path_to_cache, "w") as f:
                     f.create_dataset(
                         "valid_prefix",
@@ -1029,15 +1023,15 @@ class SequentialDataSet(Dataset[_SequentialSample]):
         self.valid_inds = valid_inds
 
         self.filename_format = r"{prefix}_pvi_idx{time_index:05d}.npz"
-            
+
     def __len__(self) -> int:
         """Return number of unique simulation prefixes."""
-        #return self.n_samples
+        # return self.n_samples
         return self.Nsamples
 
     def __getitem__(self, index: int) -> _SequentialSample:
         """Return one sequence sample: (img_seq, dt, channel_map).
-        
+
         Args:
             index (int): Index of valid sequences that will be returned.
 
@@ -1058,9 +1052,7 @@ class SequentialDataSet(Dataset[_SequentialSample]):
             # Load sequence parameters from cache.
             #
             with h5py.File(self.path_to_cache, "r") as f:
-                valid_prefix = (
-                    f["valid_prefix"][index].decode()
-                )
+                valid_prefix = f["valid_prefix"][index].decode()
                 valid_inds = f["valid_inds"][index]
 
         else:
@@ -1098,9 +1090,7 @@ class SequentialDataSet(Dataset[_SequentialSample]):
                 )
 
             except Exception as e:
-                raise RuntimeError(
-                    f"Error loading file: {file_path}"
-                ) from e
+                raise RuntimeError(f"Error loading file: {file_path}") from e
 
             #
             # Build channel metadata
@@ -1108,33 +1098,23 @@ class SequentialDataSet(Dataset[_SequentialSample]):
             ld = LabeledData(
                 file_path,
                 self.csv_filepath,
-                thermodynamic_variables=(
-                    self.thermodynamic_variables
-                ),
-                kinematic_variables=(
-                    self.kinematic_variables
-                ),
+                thermodynamic_variables=(self.thermodynamic_variables),
+                kinematic_variables=(self.kinematic_variables),
             )
 
-            active_npz_field_names = (
-                ld.get_active_npz_field_names()
-            )
+            active_npz_field_names = ld.get_active_npz_field_names()
 
-            active_hydro_field_names = (
-                ld.get_active_hydro_field_names()
-            )
+            active_hydro_field_names = ld.get_active_hydro_field_names()
 
             channel_map = ld.get_channel_map()
-            
+
             #
             # Keep only fields actually present
             #
             available_fields = set(data_npz.files)
 
             filtered_fields = [
-                f
-                for f in active_npz_field_names
-                if f in available_fields
+                f for f in active_npz_field_names if f in available_fields
             ]
 
             filtered_channel_map = [
@@ -1161,12 +1141,11 @@ class SequentialDataSet(Dataset[_SequentialSample]):
             field_imgs: list[np.ndarray] = []
 
             for hfield in filtered_fields:
-
                 tmp_img = import_img_from_npz(
                     file_path,
                     hfield,
                 )
-                
+
                 if not self.half_image:
                     tmp_img = np.concatenate(
                         (
@@ -1215,9 +1194,7 @@ class SequentialDataSet(Dataset[_SequentialSample]):
         # Final outputs
         #
         self.channel_map = channel_map
-        self.active_hydro_field_names = (
-            active_hydro_field_names
-        )
+        self.active_hydro_field_names = active_hydro_field_names
 
         # Combine frames into a single tensor of shape [seq_len, num_channels, H, W]
         img_seq = torch.stack(
@@ -1242,4 +1219,3 @@ class SequentialDataSet(Dataset[_SequentialSample]):
             Dt,
             list(self.channel_map),
         )
-
