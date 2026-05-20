@@ -23,7 +23,8 @@ import random
 import re
 import sys
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
+from collections.abc import Callable
 
 import numpy as np
 import pandas as pd
@@ -858,7 +859,7 @@ class SequentialDataSet(Dataset[_SequentialSample]):
                                        "density and energy", or "all".
         transform (Callable): Transform applied to loaded data sequence before returning.
         path_to_cache (str): Path to a cache file defining valid sequences. If
-                            the file doesn't exist, the generated sequence list will be 
+                            the file doesn't exist, the generated sequence list will be
                             stored here.
 
     """
