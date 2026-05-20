@@ -531,8 +531,6 @@ def test_sequential_dataset_getitem_success_minimal(
     assert cm == [0]
 
 
-
-
 def test_sequential_dataset_supports_nonunit_time_offset(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: pathlib.Path,
@@ -675,6 +673,7 @@ def test_sequential_dataset_applies_transform(
     assert torch.all(img_seq == 3)
     assert dt.item() == pytest.approx(0.25)
     assert cm == [0]
+
 
 def test_handle_voids_returns_none_for_non_void_field(tmp_path: pathlib.Path) -> None:
     """handle_voids returns None when hfield does not end with '_Void'."""
