@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import contextlib
 import glob
+import h5py
 import logging
 import os
 import random
