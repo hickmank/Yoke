@@ -848,10 +848,6 @@ class SequentialDataSet(Dataset[_SequentialSample]):
         csv_filepath: Full path for the design CSV.
         file_prefix_list (str): Text file listing unique prefixes corresponding
                                 to unique simulations.
-        max_file_checks (int): This dataset generates two random time indices and
-                               checks if the corresponding files exist. This
-                               argument controls the maximum number of times indices
-                               are generated before throwing an error.
         seq_len (int): Number of consecutive frames to return. This includes the
                        starting frame.
         half_image (bool): If True then returned images are NOT reflected about axis
@@ -859,6 +855,9 @@ class SequentialDataSet(Dataset[_SequentialSample]):
         kinematic_variables (str): "velocity", "position", or "both".
         thermodynamic_variables (str): "density", "density and pressure",
                                        "density and energy", or "all".
+        transform (Callable): Transform applied to loaded data sequence before returning.
+        path_to_cache (str): Path to a cache file defining valid sequences. If
+                            the file doesn't exist, the generated sequence list will be stored here.
 
     """
 
@@ -867,11 +866,13 @@ class SequentialDataSet(Dataset[_SequentialSample]):
         npz_dir: str,
         csv_filepath: str,
         file_prefix_list: str,
-        max_file_checks: int,
-        seq_len: int,
+        seq_len: int = 2,
+        timeIDX_offset: int | list[int] | tuple[int] | None = 1,
         half_image: bool = True,
         kinematic_variables: str = "velocity",
         thermodynamic_variables: str = "density",
+        transform: Any | None = None,
+        path_to_cache: str | None = None,
     ) -> None:
         """Initialize SequentialDataSet."""
         dir_path = Path(npz_dir)
@@ -880,108 +881,365 @@ class SequentialDataSet(Dataset[_SequentialSample]):
 
         self.npz_dir = npz_dir
         self.csv_filepath = csv_filepath
-        self.max_file_checks = max_file_checks
         self.seq_len = seq_len
         self.half_image = half_image
+        self.transform = transform
+        self.path_to_cache = path_to_cache
         self.thermodynamic_variables = thermodynamic_variables
         self.kinematic_variables = kinematic_variables
-
-        with open(file_prefix_list, encoding="utf-8") as f:
-            self.file_prefix_list = [line.rstrip() for line in f]
-
-        random.shuffle(self.file_prefix_list)
-        self.n_samples = len(self.file_prefix_list)
         self.rng = np.random.default_rng()
 
         self.channel_map: list[int] = []
         self.active_npz_field_names: list[str] = []
         self.active_hydro_field_names: list[str] = []
 
-    def __len__(self) -> int:
-        """Return number of unique simulation prefixes."""
-        return self.n_samples
+        #
+        # Build valid sequence list
+        #
+        self.path_to_cache = path_to_cache
+        if (self.path_to_cache is None) or (
+            not os.path.exists(self.path_to_cache)
+        ):
 
-    def __getitem__(self, index: int) -> _SequentialSample:
-        """Return one sequence sample: (img_seq, dt, channel_map)."""
-        index = index % self.n_samples
-        file_prefix = self.file_prefix_list[index]
+            with open(file_prefix_list, encoding="utf-8") as f:
+                self.file_prefix_list = [line.rstrip() for line in f]
 
-        prefix_attempt = 0
-        file_paths: list[Path] = []
+            self.rng.shuffle(self.file_prefix_list)
+        
+            #
+            # Find all NPZ files
+            #
+            all_files = []
+            for prefix in self.file_prefix_list:
+                for fpath in glob.glob(
+                    os.path.join(npz_dir, f"{prefix}*.npz")
+                ):
+                    all_files.append((prefix, fpath))
 
-        while prefix_attempt < self.max_file_checks:
-            start_idx = int(self.rng.integers(0, 100 - self.seq_len))
-            valid_sequence = True
-            file_paths = []
+            #
+            # Extract all available time indices
+            #
+            time_inds = [
+                int(re.search(file[0] + r"_pvi_idx(?P<idx>\d*).npz", file[1])["idx"])
+                for file in all_files
+            ]
+            
+            #
+            # Allow all offsets if None
+            #
+            if timeIDX_offset is None:
+                max_dt = max(time_inds) - min(time_inds)
+                timeIDX_offset = list(
+                    range(-max_dt, max_dt + 1)
+                )
 
-            for offset in range(self.seq_len):
-                idx = start_idx + offset
-                file_name = f"{file_prefix}_pvi_idx{idx:05d}.npz"
-                file_path = Path(self.npz_dir) / file_name
-                if not file_path.is_file():
-                    valid_sequence = False
-                    break
-                file_paths.append(file_path)
-
-            if valid_sequence:
-                break
-
-            prefix_attempt += 1
-            index = (index + 1) % self.n_samples
-
-        if prefix_attempt == self.max_file_checks:
-            raise RuntimeError(
-                f"Failed to find valid sequence for prefix: {file_prefix} after "
-                f"{self.max_file_checks} attempts."
+            timeIDX_offset = (
+                [timeIDX_offset] if isinstance(timeIDX_offset, int) else list(timeIDX_offset)
             )
 
+            #
+            # Find valid sequences
+            #
+            valid_prefix = []
+            valid_inds = []
+
+            for dt in timeIDX_offset:
+                for file in all_files:
+                    # Determine starting index from file name.
+                    start_idx = int(
+                        re.search(file[0] + r"_pvi_idx(?P<idx>\d*).npz", file[1])["idx"]
+                    )
+
+                    # Search for subsequent indices.
+                    valid_inds_curr = [start_idx]
+
+                    for t in range(1, seq_len):
+
+                        next_file = os.path.join(
+                            self.npz_dir,
+                            (
+                                f"{file[0]}"
+                                f"_pvi_idx"
+                                f"{start_idx + t * dt:05d}.npz"
+                            ),
+                        )
+
+                        if os.path.exists(next_file):
+                            valid_inds_curr.append(
+                                start_idx + t * dt
+                            )
+                        else:
+                            break
+
+                    #
+                    # Store only full valid sequences
+                    #
+                    if len(valid_inds_curr) == seq_len:
+                        valid_prefix.append(file[0])
+                        valid_inds.append(valid_inds_curr)
+
+            # Store the number of valid sequences
+            self.Nsamples = len(valid_prefix)
+
+        else:
+            #
+            # The cache exists, so we'll load sequences one at a time in __getitem__.
+            #
+            valid_prefix = []
+            valid_inds = []
+
+            # Count the number of valid sequences in the cache.
+            try:
+                import h5py
+                with h5py.File(self.path_to_cache, "r") as f:
+                    self.Nsamples = len(f["valid_prefix"])
+            except ImportError:
+                LOGGER.warning("h5py not available; caching disabled")
+                self.path_to_cache = None
+                self.__init__(
+                    npz_dir, csv_filepath, file_prefix_list, seq_len,
+                    timeIDX_offset, half_image, kinematic_variables,
+                    thermodynamic_variables, transform, None
+                )
+                return
+
+        #
+        # Save cache
+        #
+        valid_prefix = np.array(valid_prefix, dtype=object)
+        valid_inds = np.array(valid_inds, dtype=np.int32)
+
+        if (
+            self.path_to_cache is not None
+            and not os.path.exists(self.path_to_cache)
+        ):
+            try:
+                import h5py
+                with h5py.File(self.path_to_cache, "w") as f:
+                    f.create_dataset(
+                        "valid_prefix",
+                        data=valid_prefix,
+                        dtype=h5py.string_dtype(encoding="utf-8"),
+                    )
+                    f.create_dataset("valid_inds", data=valid_inds)
+            except ImportError:
+                LOGGER.warning("h5py not available; caching disabled")
+
+        self.valid_prefix = valid_prefix
+        self.valid_inds = valid_inds
+
+        self.filename_format = r"{prefix}_pvi_idx{time_index:05d}.npz"
+            
+    def __len__(self) -> int:
+        """Return number of unique simulation prefixes."""
+        #return self.n_samples
+        return self.Nsamples
+
+    def __getitem__(self, index: int) -> _SequentialSample:
+        """Return one sequence sample: (img_seq, dt, channel_map).
+        
+        Args:
+            index (int): Index of valid sequences that will be returned.
+
+        Returns:
+            img_seq (torch.Tensor): Sequence of frames organized as a
+                [self.seq_len, num_channels, H, W] tensor.
+            dt (torch.Tensor): Time offset between frames in `img_seq`.
+            channel_map (list[int]): Channel map for the returned sequence.
+        """
+        # Rotate index if necessary
+        index = index % self.Nsamples
+
+        #
+        # Load sequence metadata
+        #
+        if len(self.valid_prefix) == 0:
+            #
+            # Load sequence parameters from cache.
+            #
+            with h5py.File(self.path_to_cache, "r") as f:
+                valid_prefix = (
+                    f["valid_prefix"][index].decode()
+                )
+                valid_inds = f["valid_inds"][index]
+
+        else:
+            valid_prefix = self.valid_prefix[index]
+            valid_inds = self.valid_inds[index]
+
+        #
+        # Build sequence file list
+        #
+        timeIDX_offset = valid_inds[1] - valid_inds[0]
+
+        valid_seq = [
+            os.path.join(
+                self.npz_dir,
+                self.filename_format.format(
+                    prefix=valid_prefix,
+                    time_index=t_ind,
+                ),
+            )
+            for t_ind in valid_inds
+        ]
+
+        #
+        # Load and process the sequence of frames
+        #
         frames: list[torch.Tensor] = []
         channel_map: list[int] = []
         active_hydro_field_names: list[str] = []
 
-        for file_path in file_paths:
+        for file_path in valid_seq:
             try:
-                data_npz = np.load(str(file_path), allow_pickle=False)
-                ld = LabeledData(
-                    str(file_path),
-                    self.csv_filepath,
-                    thermodynamic_variables=self.thermodynamic_variables,
-                    kinematic_variables=self.kinematic_variables,
+                data_npz = np.load(
+                    file_path,
+                    allow_pickle=False,
                 )
-                self.active_npz_field_names = ld.get_active_npz_field_names()
-                active_hydro_field_names = ld.get_active_hydro_field_names()
-                channel_map = ld.get_channel_map()
 
-                field_imgs: list[np.ndarray] = []
-                for hfield in self.active_npz_field_names:
-                    tmp_img = import_img_from_npz(file_path, hfield)
-                    if not self.half_image:
-                        tmp_img = np.concatenate((np.fliplr(tmp_img), tmp_img), axis=1)
-                    field_imgs.append(tmp_img)
+            except Exception as e:
+                raise RuntimeError(
+                    f"Error loading file: {file_path}"
+                ) from e
 
-                data_npz.close()
+            #
+            # Build channel metadata
+            #
+            ld = LabeledData(
+                file_path,
+                self.csv_filepath,
+                thermodynamic_variables=(
+                    self.thermodynamic_variables
+                ),
+                kinematic_variables=(
+                    self.kinematic_variables
+                ),
+            )
 
-                img_list_combined = np.array([field_imgs])
-                channel_map_u, img_list_combined, names_u = process_channel_data(
+            active_npz_field_names = (
+                ld.get_active_npz_field_names()
+            )
+
+            active_hydro_field_names = (
+                ld.get_active_hydro_field_names()
+            )
+
+            channel_map = ld.get_channel_map()
+            
+            #
+            # Keep only fields actually present
+            #
+            available_fields = set(data_npz.files)
+
+            filtered_fields = [
+                f
+                for f in active_npz_field_names
+                if f in available_fields
+            ]
+
+            filtered_channel_map = [
+                cm
+                for cm, f in zip(
                     channel_map,
-                    img_list_combined,
-                    active_hydro_field_names,
+                    active_npz_field_names,
                 )
-                channel_map = channel_map_u
-                active_hydro_field_names = names_u
+                if f in available_fields
+            ]
 
-                field_tensor = torch.as_tensor(
-                    np.stack(img_list_combined[0], axis=0),
-                    dtype=torch.float32,
-                ).contiguous()
-                frames.append(field_tensor)
-            except OSError as exc:
-                raise RuntimeError(f"Error loading file: {file_path}") from exc
+            filtered_names = [
+                nm
+                for nm, f in zip(
+                    active_hydro_field_names,
+                    active_npz_field_names,
+                )
+                if f in available_fields
+            ]
 
+            #
+            # Load image channels
+            #
+            field_imgs: list[np.ndarray] = []
+
+            for hfield in filtered_fields:
+
+                tmp_img = import_img_from_npz(
+                    file_path,
+                    hfield,
+                )
+                
+                if not self.half_image:
+                    tmp_img = np.concatenate(
+                        (
+                            np.fliplr(tmp_img),
+                            tmp_img,
+                        ),
+                        axis=1,
+                    )
+
+                field_imgs.append(tmp_img)
+
+            data_npz.close()
+
+            #
+            # Combine repeated channels
+            #
+            img_list_combined = np.array([field_imgs])
+
+            (
+                channel_map_u,
+                img_list_combined,
+                names_u,
+            ) = process_channel_data(
+                filtered_channel_map,
+                img_list_combined,
+                filtered_names,
+            )
+
+            channel_map = channel_map_u
+            active_hydro_field_names = names_u
+
+            #
+            # Convert to tensor
+            #
+            field_tensor = torch.as_tensor(
+                np.stack(
+                    img_list_combined[0],
+                    axis=0,
+                ).copy(),
+                dtype=torch.float32,
+            ).contiguous()
+
+            frames.append(field_tensor)
+
+        #
+        # Final outputs
+        #
         self.channel_map = channel_map
-        self.active_hydro_field_names = active_hydro_field_names
+        self.active_hydro_field_names = (
+            active_hydro_field_names
+        )
 
-        img_seq = torch.stack(frames, dim=0).contiguous()
-        dt = torch.tensor(0.25, dtype=torch.float32)
+        # Combine frames into a single tensor of shape [seq_len, num_channels, H, W]
+        img_seq = torch.stack(
+            frames,
+            dim=0,
+        ).contiguous()
 
-        return (img_seq, dt, list(self.channel_map))
+        #
+        # Apply transforms if requested.
+        #
+        if self.transform is not None:
+            img_seq = self.transform(img_seq)
+
+        # Time offset
+        Dt = torch.tensor(
+            0.25 * timeIDX_offset,
+            dtype=torch.float32,
+        )
+
+        return (
+            img_seq,
+            Dt,
+            list(self.channel_map),
+        )
+
