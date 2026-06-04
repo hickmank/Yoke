@@ -56,5 +56,6 @@ SHELL ["/bin/bash", "-c"]
 # docker run -it yoke /bin/bash
 # # or with Charliecloud
 # ch-run -d -W --set-env --bind $PWD:/mnt/workspace --cd /mnt/workspace yoke.sqfs -- /bin/bash
+# pip install .
 # # a much more complicated set of binds and subsequent symlinks are necessary
-# # above to launch sbatch jobs within the container
+# # above to launch sbatch jobs within the container, i.e. the slurm submissionType

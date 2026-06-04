@@ -94,6 +94,7 @@ interactive shell:
 >> ch-run -d -W --unset-env="*" --set-env \
     --bind $PWD:/mnt/workspace --cd /mnt/workspace \
     yoke.sqfs -- /bin/bash
+>> pip install .
 ```
 
 Testing
