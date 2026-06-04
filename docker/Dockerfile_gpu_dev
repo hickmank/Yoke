@@ -4,6 +4,10 @@
 
 FROM condaforge/miniforge3:latest
 
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get -y update && apt-get install -y --no-install-recommends iproute2
+
 RUN conda install -c conda-forge flit
 
 # specify version and index to build for GPUs on non-GPU systems
@@ -51,4 +55,6 @@ SHELL ["/bin/bash", "-c"]
 
 # docker run -it yoke /bin/bash
 # # or with Charliecloud
-# ch-run -d -W --unset-env="*" --set-env --bind $PWD:/mnt/workspace --cd /mnt/workspace yoke.sqfs -- /bin/bash
+# ch-run -d -W --set-env --bind $PWD:/mnt/workspace --cd /mnt/workspace yoke.sqfs -- /bin/bash
+# # a much more complicated set of binds and subsequent symlinks are necessary
+# # above to launch sbatch jobs within the container
