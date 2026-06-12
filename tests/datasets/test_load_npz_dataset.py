@@ -451,7 +451,6 @@ def test_sequential_dataset_init_missing_dir_raises(tmp_path: pathlib.Path) -> N
             npz_dir=str(tmp_path / "nope"),
             csv_filepath=str(csv),
             file_prefix_list=str(prefix_file),
-            max_file_checks=1,
             seq_len=2,
             kinematic_variables="velocity",
             thermodynamic_variables="density",
@@ -516,17 +515,162 @@ def test_sequential_dataset_getitem_success_minimal(
         npz_dir=str(npz_dir),
         csv_filepath=str(csv),
         file_prefix_list=str(prefix_file),
-        max_file_checks=1,
         seq_len=2,
+        timeIDX_offset=1,
         half_image=True,
         kinematic_variables="velocity",
         thermodynamic_variables="density",
     )
-    ds.rng = _FakeRNG([0])  # start_idx=0
+
+    assert len(ds) == 1
 
     img_seq, dt, cm = ds[0]
     assert isinstance(img_seq, torch.Tensor)
     assert img_seq.shape == (2, 1, 2, 2)
+    assert dt.item() == pytest.approx(0.25)
+    assert cm == [0]
+
+
+def test_sequential_dataset_supports_nonunit_time_offset(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> None:
+    """SequentialDataSet builds valid sequences using configurable time offsets."""
+    npz_dir = tmp_path / "npz"
+    npz_dir.mkdir()
+    prefix_file = tmp_path / "prefixes.txt"
+    _write_prefix_file(prefix_file, ["cx241203_id00001"])
+    csv = tmp_path / "design.csv"
+    _write_design_csv(csv, [("cx241203_id00001", "Air", "Al")])
+
+    f0 = npz_dir / "cx241203_id00001_pvi_idx00000.npz"
+    f2 = npz_dir / "cx241203_id00001_pvi_idx00002.npz"
+    _write_npz(f0, dummy=np.zeros((1,), dtype=float))
+    _write_npz(f2, dummy=np.zeros((1,), dtype=float))
+
+    class FakeLabeledData:
+        """Minimal stub that matches the tiny NPZ fields used in this test."""
+
+        def __init__(
+            self,
+            npz_filepath: str,
+            csv_filepath: str,
+            kinematic_variables: str = "velocity",
+            thermodynamic_variables: str = "density",
+        ) -> None:
+            _ = (
+                npz_filepath,
+                csv_filepath,
+                kinematic_variables,
+                thermodynamic_variables,
+            )
+
+        def get_active_npz_field_names(self) -> list[str]:
+            """Return present fields."""
+            return ["dummy"]
+
+        def get_active_hydro_field_names(self) -> list[str]:
+            """Return names for present fields."""
+            return ["dummy"]
+
+        def get_channel_map(self) -> list[int]:
+            """Return a single channel index."""
+            return [0]
+
+    monkeypatch.setattr(m, "LabeledData", FakeLabeledData)
+    monkeypatch.setattr(m, "import_img_from_npz", lambda npz, fld: np.ones((2, 2)))
+    monkeypatch.setattr(
+        m,
+        "process_channel_data",
+        lambda cm, imgs, names: (cm, imgs, names),
+    )
+
+    ds = m.SequentialDataSet(
+        npz_dir=str(npz_dir),
+        csv_filepath=str(csv),
+        file_prefix_list=str(prefix_file),
+        seq_len=2,
+        timeIDX_offset=2,
+        half_image=True,
+        kinematic_variables="velocity",
+        thermodynamic_variables="density",
+    )
+
+    assert len(ds) == 1
+    img_seq, dt, cm = ds[0]
+    assert img_seq.shape == (2, 1, 2, 2)
+    assert dt.item() == pytest.approx(0.5)
+    assert cm == [0]
+
+
+def test_sequential_dataset_applies_transform(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> None:
+    """SequentialDataSet applies transform to the stacked image sequence."""
+    npz_dir = tmp_path / "npz"
+    npz_dir.mkdir()
+    prefix_file = tmp_path / "prefixes.txt"
+    _write_prefix_file(prefix_file, ["cx241203_id00001"])
+    csv = tmp_path / "design.csv"
+    _write_design_csv(csv, [("cx241203_id00001", "Air", "Al")])
+
+    f0 = npz_dir / "cx241203_id00001_pvi_idx00000.npz"
+    f1 = npz_dir / "cx241203_id00001_pvi_idx00001.npz"
+    _write_npz(f0, dummy=np.zeros((1,), dtype=float))
+    _write_npz(f1, dummy=np.zeros((1,), dtype=float))
+
+    class FakeLabeledData:
+        """Minimal stub that matches the tiny NPZ fields used in this test."""
+
+        def __init__(
+            self,
+            npz_filepath: str,
+            csv_filepath: str,
+            kinematic_variables: str = "velocity",
+            thermodynamic_variables: str = "density",
+        ) -> None:
+            _ = (
+                npz_filepath,
+                csv_filepath,
+                kinematic_variables,
+                thermodynamic_variables,
+            )
+
+        def get_active_npz_field_names(self) -> list[str]:
+            """Return present fields."""
+            return ["dummy"]
+
+        def get_active_hydro_field_names(self) -> list[str]:
+            """Return names for present fields."""
+            return ["dummy"]
+
+        def get_channel_map(self) -> list[int]:
+            """Return a single channel index."""
+            return [0]
+
+    monkeypatch.setattr(m, "LabeledData", FakeLabeledData)
+    monkeypatch.setattr(m, "import_img_from_npz", lambda npz, fld: np.ones((2, 2)))
+    monkeypatch.setattr(
+        m,
+        "process_channel_data",
+        lambda cm, imgs, names: (cm, imgs, names),
+    )
+
+    ds = m.SequentialDataSet(
+        npz_dir=str(npz_dir),
+        csv_filepath=str(csv),
+        file_prefix_list=str(prefix_file),
+        seq_len=2,
+        timeIDX_offset=1,
+        transform=lambda x: x + 2,
+        half_image=True,
+        kinematic_variables="velocity",
+        thermodynamic_variables="density",
+    )
+
+    img_seq, dt, cm = ds[0]
+    assert torch.all(img_seq == 3)
     assert dt.item() == pytest.approx(0.25)
     assert cm == [0]
 
@@ -655,7 +799,6 @@ def test_sequential_dataset_init_with_nondefault_variable_modes(
         npz_dir=str(npz_dir),
         csv_filepath=str(csv_path),
         file_prefix_list=str(prefix_file),
-        max_file_checks=1,
         seq_len=2,
         kinematic_variables="position",
         thermodynamic_variables="density and energy",
