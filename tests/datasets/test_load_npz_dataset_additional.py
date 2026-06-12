@@ -253,7 +253,7 @@ def test_temporal_dataset_getitem_success(monkeypatch: pytest.MonkeyPatch,
 
     # Bind a fast test-only __getitem__ to avoid retry/probe loops and speed
     # up the test. The bound method uses the same monkeypatched helpers.
-    def _fast_getitem(self, index: int) -> tuple:
+    def _fast_getitem(self: object, index: int) -> tuple:
         index = index % self.n_samples
         prefix = self.file_prefix_list[index]
         start_file = f"{prefix}_pvi_idx{0:05d}.npz"
@@ -360,7 +360,7 @@ def test_temporal_dataset_getitem_half_image_false(
 
     # Bind a fast test-only __getitem__ to avoid retry/probe loops and speed
     # up the test. The bound method uses the same monkeypatched helpers.
-    def _fast_getitem(self, index: int) -> tuple:
+    def _fast_getitem(self: object, index: int) -> tuple:
         index = index % self.n_samples
         prefix = self.file_prefix_list[index]
         start_file = f"{prefix}_pvi_idx{0:05d}.npz"
