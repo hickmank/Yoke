@@ -71,7 +71,7 @@ select = [
     "ANN"]
 #ignore = ["ANN101"]  # Wants a `type` defined for `self` argument!
 
-[tool.ruff.pydocstyle]
+[tool.ruff.lint.pydocstyle]
 convention = "google"
 
 # Allow exclusion of specific lines in coverage report
