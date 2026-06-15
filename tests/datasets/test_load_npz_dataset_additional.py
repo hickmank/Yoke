@@ -407,4 +407,3 @@ def test_temporal_dataset_getitem_half_image_false(
     assert start_img.shape == (1, 2, 6)
     assert end_img.shape == (1, 2, 6)
     assert dt.item() == pytest.approx(0.25)
-
