@@ -74,8 +74,7 @@ def test_labeled_data_thermodynamic_modes(tmp_path: pathlib.Path) -> None:
     the selected mode.
     """
     csv = tmp_path / "design.csv"
-    csv.write_text("idx,wallMat,backMat\ncx241203_id00001,Air,Al\n",
-                   encoding="utf-8")
+    csv.write_text("idx,wallMat,backMat\ncx241203_id00001,Air,Al\n", encoding="utf-8")
 
     npz = tmp_path / "cx241203_id00001_pvi_idx00000.npz"
     np.savez(npz, dummy=np.zeros((1,), dtype=float))
@@ -101,8 +100,7 @@ def test_labeled_data_thermodynamic_modes(tmp_path: pathlib.Path) -> None:
 def test_labeled_data_invalid_thermodynamic_raises(tmp_path: pathlib.Path) -> None:
     """Invalid thermodynamic_variables should raise ValueError."""
     csv = tmp_path / "design.csv"
-    csv.write_text("idx,wallMat,backMat\ncx241203_id00001,Air,Al\n",
-                   encoding="utf-8")
+    csv.write_text("idx,wallMat,backMat\ncx241203_id00001,Air,Al\n", encoding="utf-8")
     npz = tmp_path / "cx241203_id00001_pvi_idx00000.npz"
     np.savez(npz, dummy=np.zeros((1,), dtype=float))
 
@@ -110,8 +108,9 @@ def test_labeled_data_invalid_thermodynamic_raises(tmp_path: pathlib.Path) -> No
         _ = m.LabeledData(npz, csv, thermodynamic_variables="nope")
 
 
-def test_sequential_dataset_uses_cache(monkeypatch: pytest.MonkeyPatch,
-                                      tmp_path: pathlib.Path) -> None:
+def test_sequential_dataset_uses_cache(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
     """SequentialDataSet should read valid sequences from an h5 cache file.
 
     We create two NPZ files for a prefix and an HDF5 cache storing a single
@@ -150,8 +149,9 @@ def test_sequential_dataset_uses_cache(monkeypatch: pytest.MonkeyPatch,
 
     monkeypatch.setattr(m, "LabeledData", FakeLD)
     monkeypatch.setattr(m, "import_img_from_npz", lambda npz, fld: np.ones((2, 2)))
-    monkeypatch.setattr(m, "process_channel_data",
-                        lambda cm, imgs, names: (cm, imgs, names))
+    monkeypatch.setattr(
+        m, "process_channel_data", lambda cm, imgs, names: (cm, imgs, names)
+    )
 
     ds = m.SequentialDataSet(
         npz_dir=str(npz_dir),
@@ -198,8 +198,9 @@ def test_temporal_probe_prefix_once(tmp_path: pathlib.Path) -> None:
     assert res is None or "prefix" in res or "present_fields" in res
 
 
-def test_temporal_dataset_getitem_success(monkeypatch: pytest.MonkeyPatch,
-                                         tmp_path: pathlib.Path) -> None:
+def test_temporal_dataset_getitem_success(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
     """TemporalDataSet.__getitem__ should return tensors for a valid pair.
 
     We monkeypatch LabeledData and image loading so that the method runs
@@ -218,8 +219,7 @@ def test_temporal_dataset_getitem_success(monkeypatch: pytest.MonkeyPatch,
     prefix_file = tmp_path / "prefixes.txt"
     prefix_file.write_text(prefix + "\n", encoding="utf-8")
     csv = tmp_path / "design.csv"
-    csv.write_text("idx,wallMat,backMat\ncx241203_id00001,Air,Al\n",
-                   encoding="utf-8")
+    csv.write_text("idx,wallMat,backMat\ncx241203_id00001,Air,Al\n", encoding="utf-8")
 
     class FakeLD:
         def __init__(self, *args: tuple, **kwargs: dict) -> None:
@@ -236,8 +236,9 @@ def test_temporal_dataset_getitem_success(monkeypatch: pytest.MonkeyPatch,
 
     monkeypatch.setattr(m, "LabeledData", FakeLD)
     monkeypatch.setattr(m, "import_img_from_npz", lambda npz, fld: np.ones((2, 2)))
-    monkeypatch.setattr(m, "process_channel_data",
-                        lambda cm, imgs, names: (cm, imgs, names))
+    monkeypatch.setattr(
+        m, "process_channel_data", lambda cm, imgs, names: (cm, imgs, names)
+    )
 
     # Avoid expensive prefix probing during test initialization.
     monkeypatch.setattr(m.TemporalDataSet, "_build_valid_prefixes", lambda self: None)
@@ -261,9 +262,12 @@ def test_temporal_dataset_getitem_success(monkeypatch: pytest.MonkeyPatch,
         start_fp = pathlib.Path(self.npz_dir) / start_file
         end_fp = pathlib.Path(self.npz_dir) / end_file
 
-        ld = m.LabeledData(str(start_fp), self.csv_filepath,
-                           thermodynamic_variables=self.thermodynamic_variables,
-                           kinematic_variables=self.kinematic_variables)
+        ld = m.LabeledData(
+            str(start_fp),
+            self.csv_filepath,
+            thermodynamic_variables=self.thermodynamic_variables,
+            kinematic_variables=self.kinematic_variables,
+        )
         active_npz_field_names = ld.get_active_npz_field_names()
         channel_map = ld.get_channel_map()
         active_hydro_field_names = ld.get_active_hydro_field_names()
@@ -274,8 +278,7 @@ def test_temporal_dataset_getitem_success(monkeypatch: pytest.MonkeyPatch,
             tmp_start = m.import_img_from_npz(start_fp, h)
             tmp_end = m.import_img_from_npz(end_fp, h)
             if not self.half_image:
-                tmp_start = np.concatenate((np.fliplr(tmp_start), tmp_start),
-                                           axis=1)
+                tmp_start = np.concatenate((np.fliplr(tmp_start), tmp_start), axis=1)
                 tmp_end = np.concatenate((np.fliplr(tmp_end), tmp_end), axis=1)
             start_img_list.append(tmp_start)
             end_img_list.append(tmp_end)
@@ -285,10 +288,12 @@ def test_temporal_dataset_getitem_success(monkeypatch: pytest.MonkeyPatch,
             channel_map, imgs_combined, active_hydro_field_names
         )
 
-        start_tensor = torch.as_tensor(np.stack(imgs_combined[0], axis=0),
-                                       dtype=torch.float32).contiguous()
-        end_tensor = torch.as_tensor(np.stack(imgs_combined[1], axis=0),
-                                     dtype=torch.float32).contiguous()
+        start_tensor = torch.as_tensor(
+            np.stack(imgs_combined[0], axis=0), dtype=torch.float32
+        ).contiguous()
+        end_tensor = torch.as_tensor(
+            np.stack(imgs_combined[1], axis=0), dtype=torch.float32
+        ).contiguous()
         dt = torch.tensor(0.25 * (1 - 0), dtype=torch.float32)
         cm_tensor = torch.as_tensor(chmap_u, dtype=torch.long)
         return (start_tensor, cm_tensor, end_tensor, cm_tensor, dt)
@@ -304,9 +309,8 @@ def test_temporal_dataset_getitem_success(monkeypatch: pytest.MonkeyPatch,
 
 
 def test_temporal_dataset_getitem_half_image_false(
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: pathlib.Path
-    ) -> None:
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
     """When half_image is False, images should be doubled in width."""
     npz_dir = tmp_path / "npz"
     npz_dir.mkdir()
@@ -320,8 +324,7 @@ def test_temporal_dataset_getitem_half_image_false(
     prefix_file = tmp_path / "prefixes.txt"
     prefix_file.write_text(prefix + "\n", encoding="utf-8")
     csv = tmp_path / "design.csv"
-    csv.write_text("idx,wallMat,backMat\ncx241203_id00001,Air,Al\n",
-                   encoding="utf-8")
+    csv.write_text("idx,wallMat,backMat\ncx241203_id00001,Air,Al\n", encoding="utf-8")
 
     class FakeLD:
         def __init__(self, *args: tuple, **kwargs: dict) -> None:
@@ -343,8 +346,9 @@ def test_temporal_dataset_getitem_half_image_false(
         return np.ones((2, 3))
 
     monkeypatch.setattr(m, "import_img_from_npz", fake_import)
-    monkeypatch.setattr(m, "process_channel_data",
-                        lambda cm, imgs, names: (cm, imgs, names))
+    monkeypatch.setattr(
+        m, "process_channel_data", lambda cm, imgs, names: (cm, imgs, names)
+    )
 
     # Avoid expensive prefix probing during test initialization.
     monkeypatch.setattr(m.TemporalDataSet, "_build_valid_prefixes", lambda self: None)
@@ -368,9 +372,12 @@ def test_temporal_dataset_getitem_half_image_false(
         start_fp = pathlib.Path(self.npz_dir) / start_file
         end_fp = pathlib.Path(self.npz_dir) / end_file
 
-        ld = m.LabeledData(str(start_fp), self.csv_filepath,
-                           thermodynamic_variables=self.thermodynamic_variables,
-                           kinematic_variables=self.kinematic_variables)
+        ld = m.LabeledData(
+            str(start_fp),
+            self.csv_filepath,
+            thermodynamic_variables=self.thermodynamic_variables,
+            kinematic_variables=self.kinematic_variables,
+        )
         active_npz_field_names = ld.get_active_npz_field_names()
         channel_map = ld.get_channel_map()
         active_hydro_field_names = ld.get_active_hydro_field_names()
@@ -381,8 +388,7 @@ def test_temporal_dataset_getitem_half_image_false(
             tmp_start = m.import_img_from_npz(start_fp, h)
             tmp_end = m.import_img_from_npz(end_fp, h)
             if not self.half_image:
-                tmp_start = np.concatenate((np.fliplr(tmp_start), tmp_start),
-                                           axis=1)
+                tmp_start = np.concatenate((np.fliplr(tmp_start), tmp_start), axis=1)
                 tmp_end = np.concatenate((np.fliplr(tmp_end), tmp_end), axis=1)
             start_img_list.append(tmp_start)
             end_img_list.append(tmp_end)
@@ -392,10 +398,12 @@ def test_temporal_dataset_getitem_half_image_false(
             channel_map, imgs_combined, active_hydro_field_names
         )
 
-        start_tensor = torch.as_tensor(np.stack(imgs_combined[0], axis=0),
-                                       dtype=torch.float32).contiguous()
-        end_tensor = torch.as_tensor(np.stack(imgs_combined[1], axis=0),
-                                     dtype=torch.float32).contiguous()
+        start_tensor = torch.as_tensor(
+            np.stack(imgs_combined[0], axis=0), dtype=torch.float32
+        ).contiguous()
+        end_tensor = torch.as_tensor(
+            np.stack(imgs_combined[1], axis=0), dtype=torch.float32
+        ).contiguous()
         dt = torch.tensor(0.25 * (1 - 0), dtype=torch.float32)
         cm_tensor = torch.as_tensor(chmap_u, dtype=torch.long)
         return (start_tensor, cm_tensor, end_tensor, cm_tensor, dt)
