@@ -12,42 +12,49 @@
 
 #SBATCH --job-name=ddp_s<studyIDX>_e0001
 #SBATCH --account=y26_artimis-fmod_g
-#PRODUCTION  #SBATCH --partition=gpu
-#PRODUCTION  #SBATCH --time=16:00:00
-#SBATCH --partition=gpu
-#SBATCH --time=8:00:00
-#DEBUG  #SBATCH --time=1:00:00
-#DEBUG  #SBATCH --qos=debug
-#DEBUG  #SBATCH --reservation=gpu_debug
-#DEBUG  #SBATCH --partition=gpu_debug
+#SBATCH --partition=standard
+#SBATCH --time=1:30:00
 #SBATCH --nodes=<KNODES>
 #SBATCH --ntasks-per-node=<NGPUS>
 #SBATCH --gpus-per-node=<NGPUS>
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=8
+#SBATCH --mem-per-gpu=120G
 #SBATCH --output=study<studyIDX>_epoch0001.out
 #SBATCH --error=study<studyIDX>_epoch0001.err
 #SBATCH -vvv
 
-
 # Set the master node's address and port
 MASTER_ADDR=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)
 MASTER_PORT=$(shuf -i 1024-65535 -n 1)  # Choose a random port
-export MASTER_ADDR MASTER_PORT
+export MASTER_ADDR
+export MASTER_PORT
+
+# Enable shell debugging: Debugging selene slurm
+set -xv
 
 # Check available GPUs
 sinfo  -o "%P %.24G %N"
-srun /usr/bin/echo $CUDA_AVAILABLE_DEVICES
+srun -vv --cpu-bind=verbose /usr/bin/echo $CUDA_AVAILABLE_DEVICES
 nvidia-smi
 
 # Specify NCCL communication
-export NCCL_SOCKET_IFNAME=hsn0  # Check possible interfaces with `ip link show`
+export NCCL_SOCKET_IFNAME=ib0  # Check possible interfaces with `ip link show`
+
+# for multi-node training
+export NCCL_IB_HCA=mlx5_0
+export NCCL_IB_GID_INDEX=3  # sometimes 0 or 3 depending on subnet manager config
 
 # Debugging distributed data parallel
 # export NCCL_DEBUG=INFO
 # export NCCL_DEBUG_SUBSYS=INIT
 
-# Load correct python environment
-source $HOME/yoke_260202/bin/activate
+# Debugging selene slurm
+export SLURM_CPU_BIND=verbose
+
+# Load correct conda environment
+module load anaconda/3.12
+source activate
+conda activate <YOKE_TORCH_ENV>
 
 # Set number of threads per GPU
 export OMP_NUM_THREADS=10
@@ -57,7 +64,7 @@ export date00=`date`
 
 # Start the Code
 # Explicitly set TCP environment for the following...
-srun python -u <train_script> @study<studyIDX>_START.input
+srun -vv --cpu-bind=verbose python -u <train_script> @study<studyIDX>_START.input
 
 # Get end time and print to stdout
 export date01=`date`

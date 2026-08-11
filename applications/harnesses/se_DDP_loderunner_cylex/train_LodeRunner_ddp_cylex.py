@@ -8,13 +8,15 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from yoke.models.vit.swin.bomberman import LodeRunner
-from yoke.datasets.lsc_dataset import LSC_rho2rho_temporal_DataSet
+from yoke.datasets.load_npz_dataset import TemporalDataSet
+
 from yoke.utils.training.epoch.loderunner import train_DDP_loderunner_epoch
 from yoke.utils.restart import continuation_setup
 from yoke.utils.dataload import make_distributed_dataloader
 from yoke.utils.checkpointing import load_model_and_optimizer
 from yoke.utils.checkpointing import save_model_and_optimizer
-from yoke.lr_schedulers import ConstantWithWarmupScheduler
+
+from yoke.lr_schedulers import CosineWithWarmupScheduler
 from yoke.helpers import cli
 
 
@@ -35,26 +37,11 @@ parser = cli.add_model_args(parser=parser)
 parser = cli.add_training_args(parser=parser)
 parser = cli.add_cosine_lr_scheduler_args(parser=parser)
 
-# DPOT‐style noise parameter
-parser.add_argument(
-    "--noise_scale",
-    type=float,
-    default=0.0,
-    help="Relative magnitude ε for Gaussian noise injection (e.g. 5e-5).",
-)
-
-parser.add_argument(
-    "--max_timeIDX_offset",
-    type=int,
-    default=1,
-    help="Maximum time offset for input/output image pairs.",
-)
-
 # Change some default filepaths.
 parser.set_defaults(
-    train_filelist="lsc240420_prefixes_train_80pct.txt",
-    validation_filelist="lsc240420_prefixes_validation_10pct.txt",
-    test_filelist="lsc240420_prefixes_test_10pct.txt",
+    train_filelist="cx241203_prefixes_train_80pct.txt",
+    validation_filelist="cx241203_prefixes_val_10pct.txt",
+    test_filelist="cx241203_prefixes_test_10pct.txt",
 )
 
 
@@ -110,13 +97,18 @@ def main(args, rank, world_size, local_rank, device):
     # Data Paths
     train_filelist = args.FILELIST_DIR + args.train_filelist
     validation_filelist = args.FILELIST_DIR + args.validation_filelist
+    test_filelist = args.FILELIST_DIR + args.test_filelist
 
     # Model Parameters
     embed_dim = args.embed_dim
     block_structure = tuple(args.block_structure)
 
-    # Training parameters
-    max_timeIDX_offset = args.max_timeIDX_offset
+    # Training Parameters
+    anchor_lr = args.anchor_lr
+    num_cycles = args.num_cycles
+    min_fraction = args.min_fraction
+    terminal_steps = args.terminal_steps
+    warmup_steps = args.warmup_steps
 
     # Number of workers controls how batches of data are prefetched and,
     # possibly, pre-loaded onto GPUs. If the number of workers is large they
@@ -133,123 +125,74 @@ def main(args, rank, world_size, local_rank, device):
     trn_rcrd_filename = args.trn_rcrd_filename
     val_rcrd_filename = args.val_rcrd_filename
     CONTINUATION = args.continuation
+    START = not CONTINUATION
     checkpoint = args.checkpoint
 
-    #############################################
-    # Model Arguments for Dynamic Reconstruction
-    #############################################
     # Dictionary of available models.
     available_models = {
         "LodeRunner": LodeRunner
     }
-
-    # Not all channels are available for every PLI simulation. The burn-fraction of the
-    # maincharge as well as the yield strength, stress components, and shear modulus for
-    # metal materials are missing in many PLI simulations.
-    # available_pli_channels = [
-    #     'sim_time',
-    #     'av_density',
-    #     'av_pressure',
-    #     'av_temperature',
-    #     'burn_frac_maincharge',
-    #     'density_case',
-    #     'density_cushion',
-    #     'density_maincharge',
-    #     'density_outside_air',
-    #     'density_striker',
-    #     'density_throw',
-    #     'energy_case',
-    #     'energy_cushion',
-    #     'energy_maincharge',
-    #     'energy_outside_air',
-    #     'energy_striker',
-    #     'energy_throw',
-    #     'plst_strain_case',
-    #     'plst_strain_striker',
-    #     'plst_strain_throw',
-    #     'pressure_case',
-    #     'pressure_cushion',
-    #     'pressure_maincharge',
-    #     'pressure_outside_air',
-    #     'pressure_striker',
-    #     'pressure_throw',
-    #     'shear_modulus_case',
-    #     'shear_modulus_striker',
-    #     'shear_modulus_throw',
-    #     'sound_speed_case',
-    #     'sound_speed_cushion',
-    #     'sound_speed_maincharge',
-    #     'sound_speed_outside_air',
-    #     'sound_speed_striker',
-    #     'sound_speed_throw',
-    #     'strain_rate_case',
-    #     'strain_rate_striker',
-    #     'strain_rate_throw',
-    #     'Sxxm_case',
-    #     'Sxxm_striker',
-    #     'Sxxm_throw',
-    #     'Sxzm_case',
-    #     'Sxzm_striker',
-    #     'Sxzm_throw',
-    #     'Syym_case',
-    #     'Syym_striker',
-    #     'Syym_throw',
-    #     'Szzm_case',
-    #     'Szzm_striker',
-    #     'Szzm_throw',
-    #     'temperature_case',
-    #     'temperature_throw',
-    #     'Uvelocity',
-    #     'vofm_case',
-    #     'vofm_cushion',
-    #     'vofm_maincharge',
-    #     'vofm_outside_air',
-    #     'vofm_striker',
-    #     'vofm_throw',
-    #     'vofm_Void',
-    #     'Wvelocity',
-    #     'yield_case',
-    #     'yield_striker',
-    #     'yield_throw',
-    #     'Rcoord',
-    #     'Zcoord',
-    # ]
-
-    channel_list = [
-        'density_case',
-        'energy_case',
-        'pressure_case',
-        'density_cushion',
-        'energy_cushion',
-        'pressure_cushion',
-        'density_maincharge',
-        'energy_maincharge',
-        'pressure_maincharge',
-        'density_outside_air',
-        'energy_outside_air',
-        'pressure_outside_air',
-        'density_striker',
-        'energy_striker',
-        'pressure_striker',
-        'density_throw',
-        'energy_throw',
-        'pressure_throw',
-        'Uvelocity',
-        'Wvelocity',
-    ]
-
-    # Model arguments for LodeRunner.
+    
+    #############################################
+    # Model Arguments for Dynamic Reconstruction
+    #############################################
     model_args = {
-        "default_vars": channel_list,
+        "default_vars": [
+            "Rcoord",  # 4 kinematic variable fields
+            "Zcoord",
+            "Uvelocity",
+            "Wvelocity",
+            "density_Air",  # 39 thermodynamic variable fields
+            "energy_Air",
+            "pressure_Air",
+            "density_Al",
+            "energy_Al",
+            "pressure_Al",
+            "density_Be",
+            "energy_Be",
+            "pressure_Be",
+            "density_booster",
+            "energy_booster",
+            "pressure_booster",
+            "density_Cu",
+            "energy_Cu",
+            "pressure_Cu",
+            "density_U.DU",
+            "energy_U.DU",
+            "pressure_U.DU",
+            "density_maincharge",
+            "energy_maincharge",
+            "pressure_maincharge",
+            "density_N",
+            "energy_N",
+            "pressure_N",
+            "density_Sn",
+            "energy_Sn",
+            "pressure_Sn",
+            "density_Steel.alloySS304L",
+            "energy_Steel.alloySS304L",
+            "pressure_Steel.alloySS304L",
+            "density_Polymer.Sylgard",
+            "energy_Polymer.Sylgard",
+            "pressure_Polymer.Sylgard",
+            "density_Ta",
+            "energy_Ta",
+            "pressure_Ta",
+            "density_Void",
+            "energy_Void",
+            "pressure_Void",
+            "density_Water",
+            "energy_Water",
+            "pressure_Water",
+        ],
         "image_size": (1120, 400),
-        "patch_size": (5, 5),
+        "patch_size": (10, 5),
         "embed_dim": embed_dim,
         "emb_factor": 2,
         "num_heads": 8,
         "block_structure": block_structure,
-        "window_sizes": [(2, 2), (2, 2), (2, 2), (2, 2)],
+        "window_sizes": [(8, 8), (8, 8), (4, 4), (2, 2)],
         "patch_merge_scales": [(2, 2), (2, 2), (2, 2)],
-        "noise_scale": 0.0,
     }
 
     #############################################
@@ -282,7 +225,7 @@ def main(args, rank, world_size, local_rank, device):
         # Instantiate optimizer and move state to GPU.
         optimizer = torch.optim.AdamW(
             model.parameters(),
-            lr=1e-4,
+            lr=1e-6,
             betas=(0.9, 0.999),
             eps=1e-08,
             weight_decay=0.01
@@ -307,36 +250,48 @@ def main(args, rank, world_size, local_rank, device):
     #############################################
     # Learning Rate Scheduler
     #############################################
-    print("Starting epoch: ", starting_epoch)
     if starting_epoch == 0:
         last_epoch = -1
     else:
         last_epoch = train_batches * (starting_epoch - 1)
 
-    LRsched = ConstantWithWarmupScheduler(
+    # Scale the anchor LR by global batchsize
+    #
+    # # For multi-node
+    lr_scale = np.sqrt(float(Ngpus) * float(Knodes) * float(batch_size))
+    original_batchsize = 40.0  # 1 node, 4 gpus, 10 samples/gpu
+    ddp_anchor_lr = anchor_lr * lr_scale / original_batchsize
+    #
+    # For single node
+    # ddp_anchor_lr = anchor_lr
+    
+    LRsched = CosineWithWarmupScheduler(
         optimizer,
-        warmup_steps=0,
-        lr_constant=1e-4,
+        anchor_lr=ddp_anchor_lr,
+        terminal_steps=terminal_steps,
+        warmup_steps=warmup_steps,
+        num_cycles=num_cycles,
+        min_fraction=min_fraction,
         last_epoch=last_epoch,
     )
 
     #############################################
     # Data Initialization (Distributed Dataloader)
     #############################################
-    train_dataset = LSC_rho2rho_temporal_DataSet(
-        args.LSC_NPZ_DIR,
+    train_dataset = TemporalDataSet(
+        args.NPZ_DIR,
+        args.CSV_FILEPATH,
         file_prefix_list=train_filelist,
-        max_timeIDX_offset=max_timeIDX_offset,
+        max_timeIDX_offset=2,
         max_file_checks=10,
-        hydro_fields=np.array(channel_list),
         half_image=True,
     )
-    val_dataset = LSC_rho2rho_temporal_DataSet(
-        args.LSC_NPZ_DIR,
+    val_dataset = TemporalDataSet(
+        args.NPZ_DIR,
+        args.CSV_FILEPATH,
         file_prefix_list=validation_filelist,
-        max_timeIDX_offset=max_timeIDX_offset,
+        max_timeIDX_offset=2,
         max_file_checks=10,
-        hydro_fields=np.array(channel_list),
         half_image=True,
     )
 
@@ -383,10 +338,10 @@ def main(args, rank, world_size, local_rank, device):
         train_DDP_loderunner_epoch(
             training_data=train_dataloader,
             validation_data=val_dataloader,
+            dataset='cylex',
             num_train_batches=train_batches,
             num_val_batches=val_batches,
             model=model,
-            channel_map=list(range(len(channel_list))),
             optimizer=optimizer,
             loss_fn=loss_fn,
             LRsched=LRsched,
@@ -413,17 +368,17 @@ def main(args, rank, world_size, local_rank, device):
             print(f"Completed epoch {epochIDX}...", flush=True)
             print(f"Epoch time (minutes): {epoch_time:.2f}", flush=True)
 
-    # Save model and optimizer
-    chkpt_name_str = f'study{studyIDX:03d}_modelState_epoch{epochIDX:04d}.pth'
-    new_chkpt_path = os.path.join("./", chkpt_name_str)
+    # Save model and optimizer state in hdf5
+    chkpt_name_str = "study{0:03d}_modelState_epoch{1:04d}.pth"
+    new_chkpt_path = os.path.join("./", chkpt_name_str.format(studyIDX, epochIDX))
 
     save_model_and_optimizer(
-        model,
-        optimizer,
+        model, 
+        optimizer, 
         epochIDX,
-        new_chkpt_path,
+        new_chkpt_path, 
         model_class=LodeRunner,
-        model_args=model_args,
+        model_args=model_args
     )
 
     if rank == 0:
