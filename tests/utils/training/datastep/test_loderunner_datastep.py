@@ -285,7 +285,6 @@ def test_eval_DDP_loderunner_2frame_datastep(
         assert all_losses is None
 
 
-
 def test_eval_loderunner_datastep(device: torch.device, loss_fn: nn.Module) -> None:
     """Test eval_loderunner_datastep returns correct shapes and values."""
     model = DummyModel()

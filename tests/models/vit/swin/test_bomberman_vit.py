@@ -188,9 +188,7 @@ def test_loderunner_vit_forward_identical_signature(
     assert output.shape == (1, 2, 1120, 800)
 
 
-def test_loderunner_vit_noise_injection(
-    default_vars: list[str], device: str
-) -> None:
+def test_loderunner_vit_noise_injection(default_vars: list[str], device: str) -> None:
     """Test nonzero noise_scale changes the output stochastically.
 
     Args:
@@ -507,4 +505,3 @@ def test_loderunner_vit_single_frame_regression(
     # Deterministic with noise off.
     assert torch.allclose(out1, out2)
     assert out1.shape == (2, 3, 1120, 800)
-

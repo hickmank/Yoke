@@ -288,12 +288,8 @@ def test_apply_rotary_emb_relative_position(device: str) -> None:
     k = torch.randn(1, 1, 1, dim, device=device)
 
     def rotated_dot(p_q: float, p_k: float) -> torch.Tensor:
-        cos_q, sin_q = get_1d_rotary_pos_embed(
-            dim, torch.tensor([p_q], device=device)
-        )
-        cos_k, sin_k = get_1d_rotary_pos_embed(
-            dim, torch.tensor([p_k], device=device)
-        )
+        cos_q, sin_q = get_1d_rotary_pos_embed(dim, torch.tensor([p_q], device=device))
+        cos_k, sin_k = get_1d_rotary_pos_embed(dim, torch.tensor([p_k], device=device))
         q_rot = apply_rotary_emb(q, (cos_q, sin_q), sequence_dim=1)
         k_rot = apply_rotary_emb(k, (cos_k, sin_k), sequence_dim=1)
         return (q_rot * k_rot).sum()
@@ -349,9 +345,7 @@ def test_rope_from_centers_init_scale_scalar() -> None:
 
 def test_rope_from_centers_init_scale_list() -> None:
     """Test RoPE-from-centers accepts a per-axis scale list."""
-    rope = RotaryPositionalEmbeddingFromCenters(
-        rope_dim_list=[8, 8], scale=[2.0, 5.0]
-    )
+    rope = RotaryPositionalEmbeddingFromCenters(rope_dim_list=[8, 8], scale=[2.0, 5.0])
 
     assert torch.allclose(rope.scale_tensor, torch.tensor([2.0, 5.0]))
 
@@ -359,9 +353,7 @@ def test_rope_from_centers_init_scale_list() -> None:
 def test_rope_from_centers_init_scale_length_mismatch() -> None:
     """Test RoPE-from-centers rejects a mismatched scale length."""
     with pytest.raises(AssertionError):
-        RotaryPositionalEmbeddingFromCenters(
-            rope_dim_list=[8, 8], scale=[2.0, 5.0, 7.0]
-        )
+        RotaryPositionalEmbeddingFromCenters(rope_dim_list=[8, 8], scale=[2.0, 5.0, 7.0])
 
 
 def test_rope_from_centers_forward_2d_shape(device: str) -> None:
@@ -557,4 +549,3 @@ def test_rope_scale_axis_order(device: str) -> None:
     ).to(device)
     cos_swapped, _ = swapped(centers)
     assert not torch.allclose(cos_scaled, cos_swapped, atol=1e-6)
-
