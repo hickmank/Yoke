@@ -965,9 +965,7 @@ class LSC_rho2rho_temporal_2frame_DataSet(Dataset):
 
         return torch.tensor(np.stack(img_list, axis=0)).to(torch.float32)
 
-    def __getitem__(
-        self, index: int
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Return ``(input_frames, target_frame, lead_times)`` for one sample.
 
         Returns:
@@ -1036,9 +1034,7 @@ class LSC_rho2rho_temporal_2frame_DataSet(Dataset):
         input_frames = torch.stack([prev_img, curr_img], dim=0)
 
         # Lead-times (dt_in, dt_out) in the same physical units (0.25/index).
-        lead_times = torch.tensor(
-            [0.25 * gap_in, 0.25 * gap_out], dtype=torch.float32
-        )
+        lead_times = torch.tensor([0.25 * gap_in, 0.25 * gap_out], dtype=torch.float32)
 
         return input_frames, next_img, lead_times
 
