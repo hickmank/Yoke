@@ -397,9 +397,7 @@ if __name__ == "__main__":
     head_dim = 16
     emb_size = num_heads * head_dim  # 128
 
-    x = torch.rand(
-        3, patch_grid_size[0] * patch_grid_size[1], emb_size, device=device
-    )
+    x = torch.rand(3, patch_grid_size[0] * patch_grid_size[1], emb_size, device=device)
 
     backbone = PlainViTBackbone(
         patch_grid_size=patch_grid_size,

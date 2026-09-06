@@ -764,7 +764,7 @@ if __name__ == "__main__":
         ("headier", 512, 12, 16),
         ("wide-shallow", 768, 8, 12),
         ("wide-deep", 640, 16, 10),
-        #("wide-deep", 768, 16, 12),  # Cuda OOM
+        # ("wide-deep", 768, 16, 12),  # Cuda OOM
     ]
 
     for size_name, vit_embed_dim, vit_num_layers, vit_num_attention_heads in sizes:
@@ -775,7 +775,7 @@ if __name__ == "__main__":
             embed_dim=vit_embed_dim,
             num_heads=num_heads,
             num_attention_heads=vit_num_attention_heads,
-            attention_head_dim=int(vit_embed_dim/vit_num_attention_heads),
+            attention_head_dim=int(vit_embed_dim / vit_num_attention_heads),
             num_layers=vit_num_layers,
             mlp_ratio=4.0,
             concat_mlp=True,
@@ -808,13 +808,33 @@ if __name__ == "__main__":
     finest_sizes = [
         (
             "artimis-finest",
-            (1120, 400), (10, 5), 2304, 12, 12, 192, 6, 1.0,
-            10000.0, (80.0, 224.0), 1e-7, True,
+            (1120, 400),
+            (10, 5),
+            2304,
+            12,
+            12,
+            192,
+            6,
+            1.0,
+            10000.0,
+            (80.0, 224.0),
+            1e-7,
+            True,
         ),
         (
             "artimis-finest-lite",
-            (1120, 400), (10, 5), 768, 12, 12, 64, 6, 1.0,
-            10000.0, (80.0, 224.0), 1e-7, True,
+            (1120, 400),
+            (10, 5),
+            768,
+            12,
+            12,
+            64,
+            6,
+            1.0,
+            10000.0,
+            (80.0, 224.0),
+            1e-7,
+            True,
         ),
     ]
 
@@ -861,9 +881,7 @@ if __name__ == "__main__":
                 f"{count_torch_params(lode_runner_vit, trainable=True):,}"
             )
 
-            vit_out = lode_runner_vit(
-                x_finest, x_vars, out_vars, lead_times_finest
-            )
+            vit_out = lode_runner_vit(x_finest, x_vars, out_vars, lead_times_finest)
             print(f"LodeRunnerViT-{size_name} output shape: {vit_out.shape}")
             print(
                 f"LodeRunnerViT-{size_name} output has NaNs: "

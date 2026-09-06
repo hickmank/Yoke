@@ -94,8 +94,7 @@ def get_1d_rotary_pos_embed(
 
     # freqs: (dim//2,)
     freqs = 1.0 / (
-        theta
-        ** (torch.arange(0, dim, 2, dtype=torch.float32, device=pos.device) / dim)
+        theta ** (torch.arange(0, dim, 2, dtype=torch.float32, device=pos.device) / dim)
     )
 
     pos = pos.to(torch.float32)
