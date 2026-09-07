@@ -235,6 +235,18 @@ def add_training_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
         argparse.ArgumentParser: The argparse.ArgumentParser object with added arguments.
     """
     parser.add_argument(
+        "--studyIDX",
+        action="store",
+        type=int,
+        default=1,
+        help=(
+            "Study index used for filenaming (checkpoints, records) and job "
+            "continuation. Supplied per-run by the harness's rendered "
+            "training_input file, where <studyIDX> is substituted from the "
+            "hyperparameter CSV's first column. Not a flag for yoke-start-study."
+        ),
+    )
+    parser.add_argument(
         "--batch_size", action="store", type=int, default=64, help="Batch size"
     )
     parser.add_argument(
