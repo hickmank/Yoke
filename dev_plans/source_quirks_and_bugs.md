@@ -1,15 +1,13 @@
 # Source Quirks & Bugs Found While Raising `src/yoke` Coverage
 
-Status: **open** — logged while writing tests to bring `src/yoke` coverage back
-above 92% (it had dropped after the `ch_DDP_diffLDR` functionality was merged into
-`main` without tests). Coverage is now ~93% and the full suite passes with
-`-Werror`.
+Status: **RESOLVED** — all three issues (plus sub-issue #2a) documented below have
+been fixed and covered by tests. The full suite passes with `-Werror` and the
+touched files pass `ruff check` / `ruff format`.
 
-These are latent quirks/bugs in the installable package that were surfaced by the
-new tests. They were **not** "fixed" as part of the coverage work (to keep that
-change set focused on tests), but two of them are real correctness bugs that
-should be fixed soon. Tests were written around the *actual* current behavior and
-call these out where relevant.
+These were latent quirks/bugs in the installable package surfaced by coverage
+work. They were originally logged (not fixed) to keep the coverage change set
+focused; they have now been fixed in a dedicated change. Each section records the
+original finding followed by a **Resolution** note.
 
 ---
 
@@ -57,6 +55,13 @@ top/bottom × left/right combinations, not just output shape).
 Coverage note: `transforms.py:76` is currently uncovered precisely because it is
 unreachable given the `__init__` assertion.
 
+**Resolution (FIXED):** the crop block now keys the horizontal crop on
+`pad_position[1]` and the vertical crop on `pad_position[0]`, keeping the slice
+away from the padded edge in every case (pad top -> keep bottom slice, pad left ->
+keep right slice, etc.). Added `test_resize_pad_crop_pixel_correctness`, which
+asserts pixel-level correctness (padding lands on the requested edges, original
+content is preserved) across all four top/bottom × left/right combinations.
+
 ---
 
 ## 2. `utils/checkpointing.py` — HDF5 scalar params/buffers are saved but never
@@ -90,6 +95,15 @@ the checkpointed one. Confirmed by test: after a save/load round-trip, a scalar
 `model/parameters/` and `model/buffers/`) and copy those scalars back into the
 model, mirroring the save-side branch.
 
+**Resolution (FIXED):** `load_model_and_optimizer_hdf5` now iterates
+`h5f.attrs`, and for keys prefixed `model/parameters/` and `model/buffers/`
+copies the scalar values back into the corresponding parameter/buffer. Verified
+by round-trip value assertions in `tests/test_checkpointing.py`
+(`test_hdf5_scalar_param_and_buffer_roundtrip`) and the strengthened
+`tests/test_training_utils.py::test_hdf5_roundtrip_scalar_params_and_buffers`
+(which now sets distinctive scalar values and asserts they survive the round
+trip).
+
 ### 2a. HDF5 optimizer momentum state is likely not reloaded either
 
 `save_model_and_optimizer_hdf5` writes optimizer state tensors under nested paths
@@ -117,6 +131,16 @@ Coverage note: `checkpointing.py` lines `100, 111, 123, 145-150` are uncovered
 because of the two issues above (dead/unreachable load branches); lines
 `195, 202, 225, 255, 268-270, 303` are the `dist.is_initialized()` DDP branches,
 which need a live process group to exercise.
+
+**Resolution (FIXED):** the loader now descends into the `optimizer` group and
+matches `state{idx}` subgroups there. Because a freshly-constructed optimizer has
+an empty `state` dict, the entries are now built directly keyed by the saved
+parameter index (rather than indexing into an assumed-populated `state` dict,
+which raised `IndexError`). Scalar (0-dim) state datasets (e.g. the SGD
+`momentum_buffer` of a scalar parameter) are read with `[()]` and wrapped in
+`np.asarray` so `torch.from_numpy` accepts them. Verified by
+`test_hdf5_optimizer_momentum_roundtrip`, which asserts SGD momentum buffers
+survive the round trip.
 
 ---
 
@@ -147,11 +171,17 @@ This one is **not urgent**; documented for awareness. The new `strings` tests
 cover both the Python-`bool` (int path) and `np.bool_` (bool path) behaviors as
 they currently stand.
 
+**Resolution (FIXED):** the bool check now precedes the int check in
+`replace_keys`, so both Python `bool` and `np.bool_` render canonically as
+`"True"`/`"False"`. The `test_replace_keys` parametrization was updated
+accordingly (Python `True` -> `"True"`, and a new `False` -> `"False"` case).
+
 ---
 
 ## Recommended follow-up
 
-- [ ] Fix `ResizePadCrop` horizontal crop indexing (#1) + add pixel-level tests.
-- [ ] Fix HDF5 scalar param/buffer reload (#2) and optimizer-state reload (#2a) +
+- [x] Fix `ResizePadCrop` horizontal crop indexing (#1) + add pixel-level tests.
+- [x] Fix HDF5 scalar param/buffer reload (#2) and optimizer-state reload (#2a) +
       add round-trip value assertions.
-- [ ] Decide on canonical bool rendering in `replace_keys` (#3) — optional.
+- [x] Decide on canonical bool rendering in `replace_keys` (#3) — rendered as
+      `"True"`/`"False"` for both Python `bool` and `np.bool_`.

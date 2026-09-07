@@ -624,16 +624,21 @@ def test_freeze_torch_params() -> None:
 
 
 def test_hdf5_roundtrip_scalar_params_and_buffers() -> None:
-    """HDF5 save handles scalar params/buffers; vector data round-trips.
+    """HDF5 save/load round-trips scalar params/buffers and vector data.
 
-    Note: 0-dim (scalar) parameters and buffers are written to HDF5 attributes by
-    ``save_model_and_optimizer_hdf5`` but are not reloaded by
-    ``load_model_and_optimizer_hdf5`` (which only iterates dataset members), so we
-    only assert round-trip equality for non-scalar (dataset) tensors here. The
-    scalar path is still exercised on the save side.
+    0-dim (scalar) parameters and buffers are written to HDF5 attributes by
+    ``save_model_and_optimizer_hdf5`` and reloaded from those attributes by
+    ``load_model_and_optimizer_hdf5``. This asserts both the scalar (attribute)
+    and non-scalar (dataset) paths round-trip correctly.
     """
     model = ScalarBufferModel()
     optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
+
+    # Give the scalar param/buffer distinctive values so a fresh model (which uses
+    # the constructor defaults) cannot trivially match them.
+    with torch.no_grad():
+        model.scale.fill_(9.0)
+        model.scalar_buf.fill_(4.0)
 
     # Take an optimization step so the optimizer accumulates tensor state
     # (momentum buffers), exercising the optimizer-state save/load branches.
@@ -659,6 +664,9 @@ def test_hdf5_roundtrip_scalar_params_and_buffers() -> None:
         )
 
         assert loaded_epoch == epoch
+        # Scalar (0-dim) param and buffer restored from HDF5 attributes.
+        assert torch.equal(loaded_model.scale.detach(), model.scale.detach())
+        assert torch.equal(loaded_model.scalar_buf, model.scalar_buf)
         # Non-scalar (dataset) buffer restored.
         assert torch.equal(loaded_model.vector_buf, model.vector_buf)
         # Linear weight/bias (non-scalar params) restored.

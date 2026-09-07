@@ -17,8 +17,9 @@ from yoke.helpers import strings
         ({"int_test": 12}, "<int_test>", "12"),
         # Case 4: str values
         ({"str_test": "test"}, "<str_test>", "test"),
-        # Case 5: bool values
-        ({"bool_test": True}, "<bool_test>", "1"),
+        # Case 5: bool values (Python bool now renders canonically as "True"/"False")
+        ({"bool_test": True}, "<bool_test>", "True"),
+        ({"bool_false_test": False}, "<bool_false_test>", "False"),
         # Case 6: numpy float
         ({"npfloat_test": np.float64(2.5)}, "<npfloat_test>", "2.5"),
         # Case 7: numpy int
