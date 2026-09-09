@@ -1,5 +1,20 @@
 # Dev Plan: Convert `TandVplot.py` into an installed CLI (`yoke-plot-loss`)
 
+> **Status: COMPLETED.** Implemented and merged. Summary of delivered work:
+> - `src/yoke/plots/__init__.py` + `src/yoke/plots/loss_curves.py`
+>   (`find_record_csvs`, `load_record_csv`, `compute_quantile_bands`,
+>   `plot_loss_curves`, `save_or_show_figure`).
+> - `add_plot_loss_args` added to `src/yoke/helpers/cli.py`
+>   (default `--basedir` is `./runs`).
+> - `src/yoke/cli/plot_loss.py` with a thin `main()`, registered as
+>   `yoke-plot-loss` in `pyproject.toml` `[project.scripts]`.
+> - `applications/evaluation/TandVplot.py` reduced to a shim calling
+>   `yoke.cli.plot_loss.main()`.
+> - Tests: `tests/plots/test_loss_curves.py`, `tests/cli/test_plot_loss.py`
+>   (Agg backend; remainder warning caught with `pytest.warns`).
+> - Verified: `pytest -Werror` (all pass), `ruff check` (+ `--preview`) and
+>   `ruff format --check` clean.
+
 ## 1. Goal
 
 Turn the ad-hoc script `applications/evaluation/TandVplot.py` into a reusable,
