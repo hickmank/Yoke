@@ -7,6 +7,7 @@ evaluation processes, ensuring that model states can be saved and restored effec
 
 import copy
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.distributed as dist
@@ -118,6 +119,21 @@ def load_model_and_optimizer_hdf5(
 
             model.get_submodule(submod_name)._parameters[param_name].data.copy_(data)
 
+        # Load scalar (0-dim) parameters stored as HDF5 attributes. These are not
+        # members of the "model/parameters" group, so the loop above never sees them.
+        param_attr_prefix = "model/parameters/"
+        for attr_name in h5f.attrs:
+            if attr_name.startswith(param_attr_prefix):
+                name = attr_name[len(param_attr_prefix) :]
+                data = torch.tensor(h5f.attrs[attr_name])
+
+                name_list = name.split(".")
+                param_name = name_list.pop()
+                submod_name = ".".join(name_list)
+
+                submodule = model.get_submodule(submod_name)
+                submodule._parameters[param_name].data.copy_(data)
+
         for name in h5f.get("model/buffers", []):
             if isinstance(h5f["model/buffers/" + name], h5py.Dataset):
                 buffer = torch.from_numpy(h5f["model/buffers/" + name][:])
@@ -128,6 +144,19 @@ def load_model_and_optimizer_hdf5(
             param_name = name_list.pop()
             submod_name = ".".join(name_list)
             model.get_submodule(submod_name)._buffers[param_name].data.copy_(buffer)
+
+        # Load scalar (0-dim) buffers stored as HDF5 attributes (see note above).
+        buffer_attr_prefix = "model/buffers/"
+        for attr_name in h5f.attrs:
+            if attr_name.startswith(buffer_attr_prefix):
+                name = attr_name[len(buffer_attr_prefix) :]
+                buffer = torch.tensor(h5f.attrs[attr_name])
+
+                name_list = name.split(".")
+                param_name = name_list.pop()
+                submod_name = ".".join(name_list)
+                submodule = model.get_submodule(submod_name)
+                submodule._buffers[param_name].data.copy_(buffer)
 
         # Rebuild optimizer state (need to call this before loading state)
         optimizer_state = optimizer.state_dict()
@@ -141,17 +170,25 @@ def load_model_and_optimizer_hdf5(
                     h5f.attrs[k]
                 )
 
-        # Load state values, like momentums
-        for name, group in h5f.items():
-            if "optimizer/state" in name:
-                state_idx = int(name.split("state")[1])
-                param_idx, param_state = list(optimizer_state["state"].items())[
-                    state_idx
-                ]
-                for k in group:
-                    optimizer_state["state"][param_idx][k] = torch.from_numpy(
-                        group[k][:]
-                    )
+        # Load state values, like momentums. Optimizer state tensors are stored
+        # under nested paths like "optimizer/state{idx}/{k}", so we must descend
+        # into the "optimizer" group rather than iterating only top-level names.
+        # A freshly-constructed optimizer has an empty "state" dict, so we build
+        # the entries directly keyed by the saved parameter index (state{idx}).
+        optimizer_group = h5f.get("optimizer")
+        if optimizer_group is not None:
+            for name, group in optimizer_group.items():
+                if name.startswith("state"):
+                    state_idx = int(name.split("state")[1])
+                    optimizer_state["state"].setdefault(state_idx, {})
+                    for k in group:
+                        # Use [()] so 0-dim (scalar) datasets read correctly;
+                        # a slice like [:] raises on scalar dataspaces. Wrap with
+                        # np.asarray so scalar reads (numpy scalars) become 0-dim
+                        # arrays that torch.from_numpy can consume.
+                        optimizer_state["state"][state_idx][k] = torch.from_numpy(
+                            np.asarray(group[k][()])
+                        )
 
         # Load optimizer state
         optimizer.load_state_dict(optimizer_state)

@@ -71,12 +71,16 @@ class ResizePadCrop(torch.nn.Module):
                 value=self.pad_value,
             )
 
-            # Crop, ensuring we remove edges corresponding to the padding positions:
-            if self.pad_position[0] == "left":
+            # Crop, ensuring we remove edges corresponding to the padding positions.
+            # Horizontal crop (dim -1) is driven by pad_position[1] ("left"/"right");
+            # vertical crop (dim -2) is driven by pad_position[0] ("top"/"bottom").
+            # When padding is added on one side, the real image content lives on the
+            # opposite side, so we keep the slice away from the padded edge.
+            if self.pad_position[1] == "left":
                 img = img[..., -self.scaled_image_size[1] :]
             else:
                 img = img[..., : self.scaled_image_size[1]]
-            if self.pad_position[0] == "bottom":
+            if self.pad_position[0] == "top":
                 img = img[..., -self.scaled_image_size[0] :, :]
             else:
                 img = img[..., : self.scaled_image_size[0], :]
