@@ -62,10 +62,11 @@ class mmnist_dataSet(Dataset):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
-    # standard flags (gives you --studyIDX, --csv, --rundir, --cpFile)
+    # standard flags (gives you --csv, --rundir, --cpFile)
     parser = cli.add_default_args(parser)
     # GPU/worker flags (e.g. --multigpu, --Ngpus, --num_workers)
     parser = cli.add_computing_args(parser)
+    # training flags (gives you --studyIDX, --batch_size, --total_epochs, ...)
     parser = cli.add_training_args(parser)
 
     parser.add_argument("--lr", type=float, default=1e-3, help="learning rate")
