@@ -552,3 +552,80 @@ def add_ch_subsampling_args(
     )
 
     return parser
+
+
+def add_plot_loss_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
+    """Add loss-curve plotting arguments for the ``yoke-plot-loss`` CLI.
+
+    Args:
+        parser (argparse.ArgumentParser): An argument parser to add arguments to.
+
+    Returns:
+        argparse.ArgumentParser: The argparse.ArgumentParser object with added arguments.
+    """
+    parser.add_argument(
+        "--basedir",
+        action="store",
+        type=str,
+        default="./runs",
+        help="Directory to look for studies.",
+    )
+    parser.add_argument(
+        "--IDX",
+        "-I",
+        action="store",
+        type=int,
+        default=0,
+        help="Index of study to plot curves for.",
+    )
+    parser.add_argument(
+        "--Nsamps_per_trn_pt",
+        "-Nt",
+        action="store",
+        type=int,
+        default=2012,
+        help="Number of samples per training loss plot point.",
+    )
+    parser.add_argument(
+        "--Nsamps_per_val_pt",
+        "-Nv",
+        action="store",
+        type=int,
+        default=250,
+        help="Number of samples per validation loss plot point.",
+    )
+    parser.add_argument(
+        "--scatter",
+        "-s",
+        action="store_true",
+        help="Plot each loss value as a scatter.",
+    )
+    parser.add_argument(
+        "--ylim",
+        "-Y",
+        action="store",
+        type=float,
+        default=1.0,
+        help="Upper y-axis limit for plot.",
+    )
+    parser.add_argument(
+        "--inprogress",
+        "-P",
+        action="store_true",
+        help="If run is still training throw out last training CSV.",
+    )
+    parser.add_argument(
+        "--savedir",
+        action="store",
+        type=str,
+        default="./",
+        help="Directory for saving images.",
+    )
+    parser.add_argument(
+        "--savefig",
+        "-S",
+        action="store_true",
+        help="Flag to save figures.",
+    )
+
+    return parser
