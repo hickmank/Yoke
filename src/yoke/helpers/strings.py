@@ -21,12 +21,15 @@ def replace_keys(study_dict: dict, data: str) -> str:
             data = data.replace(f"<{key}>", f"{value:03d}")
         elif isinstance(value, np.float64) or isinstance(value, float):
             data = data.replace(f"<{key}>", f"{value}")
+        elif isinstance(value, np.bool_) or isinstance(value, bool):
+            # Check bool before int: Python `bool` is a subclass of `int`, so this
+            # branch must come first to render True/False canonically (rather than
+            # 1/0) for both Python `bool` and NumPy `np.bool_` values.
+            data = data.replace(f"<{key}>", f"{str(value)}")
         elif isinstance(value, np.int64) or isinstance(value, int):
             data = data.replace(f"<{key}>", f"{value:d}")
         elif isinstance(value, str):
             data = data.replace(f"<{key}>", f"{value}")
-        elif isinstance(value, np.bool_) or isinstance(value, bool):
-            data = data.replace(f"<{key}>", f"{str(value)}")
         else:
             print("Key is", key, "with value of", value, "with type", type(value))
             raise ValueError("Unrecognized datatype in hyperparameter list.")

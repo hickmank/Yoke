@@ -29,13 +29,6 @@ def add_default_args(parser: argparse.ArgumentParser = None) -> argparse.Argumen
         help="CSV file containing study hyperparameters",
     )
     parser.add_argument(
-        "--studyIDX",
-        action="store",
-        type=int,
-        default=1,
-        help="Study ID number to match hyperparameters",
-    )
-    parser.add_argument(
         "--rundir",
         action="store",
         type=str,
@@ -57,11 +50,19 @@ def add_default_args(parser: argparse.ArgumentParser = None) -> argparse.Argumen
     )
     parser.add_argument(
         "--submissionType",
-        choices=["slurm", "flux", "shell", "batch"],
+        choices=["slurm", "shell"],
         default="slurm",
         help=(
             "Which job‐submission wrapper to use (defaults to slurm, "
-            "choices: slurm, flux, shell, batch)."
+            "choices: slurm, shell)."
+        ),
+    )
+    parser.add_argument(
+        "--dryrun",
+        action="store_true",
+        help=(
+            "Prepare study directories and render submission files without "
+            "submitting any jobs. The submit command is printed instead of run."
         ),
     )
 
@@ -233,6 +234,18 @@ def add_training_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
     Returns:
         argparse.ArgumentParser: The argparse.ArgumentParser object with added arguments.
     """
+    parser.add_argument(
+        "--studyIDX",
+        action="store",
+        type=int,
+        default=1,
+        help=(
+            "Study index used for filenaming (checkpoints, records) and job "
+            "continuation. Supplied per-run by the harness's rendered "
+            "training_input file, where <studyIDX> is substituted from the "
+            "hyperparameter CSV's first column. Not a flag for yoke-start-study."
+        ),
+    )
     parser.add_argument(
         "--batch_size", action="store", type=int, default=64, help="Batch size"
     )
@@ -536,6 +549,83 @@ def add_ch_subsampling_args(
         type=int,
         default=3,
         help="Channel subsampling map size",
+    )
+
+    return parser
+
+
+def add_plot_loss_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
+    """Add loss-curve plotting arguments for the ``yoke-plot-loss`` CLI.
+
+    Args:
+        parser (argparse.ArgumentParser): An argument parser to add arguments to.
+
+    Returns:
+        argparse.ArgumentParser: The argparse.ArgumentParser object with added arguments.
+    """
+    parser.add_argument(
+        "--basedir",
+        action="store",
+        type=str,
+        default="./runs",
+        help="Directory to look for studies.",
+    )
+    parser.add_argument(
+        "--IDX",
+        "-I",
+        action="store",
+        type=int,
+        default=0,
+        help="Index of study to plot curves for.",
+    )
+    parser.add_argument(
+        "--Nsamps_per_trn_pt",
+        "-Nt",
+        action="store",
+        type=int,
+        default=2012,
+        help="Number of samples per training loss plot point.",
+    )
+    parser.add_argument(
+        "--Nsamps_per_val_pt",
+        "-Nv",
+        action="store",
+        type=int,
+        default=250,
+        help="Number of samples per validation loss plot point.",
+    )
+    parser.add_argument(
+        "--scatter",
+        "-s",
+        action="store_true",
+        help="Plot each loss value as a scatter.",
+    )
+    parser.add_argument(
+        "--ylim",
+        "-Y",
+        action="store",
+        type=float,
+        default=1.0,
+        help="Upper y-axis limit for plot.",
+    )
+    parser.add_argument(
+        "--inprogress",
+        "-P",
+        action="store_true",
+        help="If run is still training throw out last training CSV.",
+    )
+    parser.add_argument(
+        "--savedir",
+        action="store",
+        type=str,
+        default="./",
+        help="Directory for saving images.",
+    )
+    parser.add_argument(
+        "--savefig",
+        "-S",
+        action="store_true",
+        help="Flag to save figures.",
     )
 
     return parser

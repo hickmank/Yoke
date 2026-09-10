@@ -49,7 +49,11 @@ docs = ["sphinx", "furo"]
 ci = ["coveralls"]
 
 [project.urls]
-Source = "https://github.com/lanl/Yoke"
+Source = "https://github.com/lanl/yoke"
+
+[project.scripts]
+yoke-start-study = "yoke.cli.start_study:main"
+yoke-plot-loss = "yoke.cli.plot_loss:main"
 
 [tool.ruff]
 line-length = 89
