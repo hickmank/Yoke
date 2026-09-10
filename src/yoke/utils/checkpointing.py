@@ -6,6 +6,7 @@ evaluation processes, ensuring that model states can be saved and restored effec
 """
 
 import copy
+import warnings
 
 import numpy as np
 import torch
@@ -25,6 +26,13 @@ def save_model_and_optimizer_hdf5(
 
     Model and optimizer should be moved to the CPU prior to using this function.
 
+    .. deprecated::
+        HDF5 checkpoint writing is deprecated and targeted for **hard removal in
+        December 2026**. Use :func:`save_model_and_optimizer` (the ``.pth`` path),
+        which is the single supported checkpoint format for all new runs. This
+        function is retained only to avoid breaking legacy code until the removal
+        date.
+
     Args:
         model (torch.nn.Module): Pytorch model to save
         optimizer (torch.optim.Optimizer): Pytorch optimizer to save
@@ -34,6 +42,14 @@ def save_model_and_optimizer_hdf5(
                          was compiled.
 
     """
+    warnings.warn(
+        "save_model_and_optimizer_hdf5 is deprecated and will be removed in "
+        "December 2026. Use save_model_and_optimizer (the .pth checkpoint path) "
+        "instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
     # If model is wrapped in DataParallel, access the underlying module
     if isinstance(model, torch.nn.DataParallel):
         model = model.module
@@ -89,6 +105,14 @@ def load_model_and_optimizer_hdf5(
 ) -> int:
     """Loads state of model and optimizer stored in an hdf5 format.
 
+    .. deprecated::
+        HDF5 checkpoint loading is deprecated and targeted for **hard removal in
+        December 2026**. It is retained as a **read-only compatibility shim** so
+        that previously produced ``.hdf5`` checkpoints (and the evaluation
+        scripts that read them) keep working until that removal date. New runs
+        write ``.pth`` checkpoints via :func:`save_model_and_optimizer`; load
+        them with :func:`load_model_and_optimizer`.
+
     Args:
         model (torch.nn.Module): Pytorch model to load state into.
         optimizer (torch.optim.Optimizer): Pytorch optimizer to load state into.
@@ -98,6 +122,15 @@ def load_model_and_optimizer_hdf5(
         epoch (int): Epoch associated with training
 
     """
+    warnings.warn(
+        "load_model_and_optimizer_hdf5 is deprecated and will be removed in "
+        "December 2026. It is retained only as a read-only shim for existing "
+        ".hdf5 checkpoints; use load_model_and_optimizer (the .pth path) for "
+        "new runs.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
     # If model is wrapped in DataParallel, access the underlying module
     if isinstance(model, torch.nn.DataParallel):
         model = model.module

@@ -38,7 +38,10 @@ class DummyModel(nn.Module):
 def setup_environment() -> LodeRunner_DataParallel:
     """Fixture to create a dummy LodeRunner_DataParallel instance."""
     model = DummyModel()
-    return LodeRunner_DataParallel(model)
+    # LodeRunner_DataParallel is deprecated (Dec-2026 removal); constructing it
+    # emits a DeprecationWarning that we expect here.
+    with pytest.warns(DeprecationWarning):
+        return LodeRunner_DataParallel(model)
 
 
 def test_no_device_ids(setup_environment: LodeRunner_DataParallel) -> None:

@@ -2,10 +2,44 @@
 
 import argparse
 import os
+import warnings
 
 
 # Set the yoke root path relative to this file for usage in defaults below.
 YOKE_PATH = os.path.join(os.path.dirname(__file__), "../../..")
+
+
+class _DeprecatedMultiGPUAction(argparse.Action):
+    """Argparse action that warns and ignores the deprecated ``--multigpu`` flag.
+
+    Vanilla :class:`torch.nn.DataParallel` training is deprecated in favor of
+    DDP. The flag is kept parseable so existing ``@``-input files do not break,
+    but it is now a no-op targeted for **hard removal in December 2026**.
+    """
+
+    def __init__(self, option_strings: list[str], dest: str, **kwargs: object) -> None:
+        """Force the action to behave like ``store_true`` with a ``False`` default."""
+        kwargs["nargs"] = 0
+        kwargs.setdefault("default", False)
+        super().__init__(option_strings, dest, **kwargs)
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: object,
+        option_string: str | None = None,
+    ) -> None:
+        """Warn about deprecation and leave the destination at ``False``."""
+        warnings.warn(
+            "--multigpu is deprecated and ignored; vanilla DataParallel training "
+            "has been replaced by DDP. This flag will be removed in December "
+            "2026.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        setattr(namespace, self.dest, False)
+
 
 
 def add_default_args(parser: argparse.ArgumentParser = None) -> argparse.ArgumentParser:
@@ -169,8 +203,12 @@ def add_computing_args(parser: argparse.ArgumentParser) -> argparse.ArgumentPars
     """
     parser.add_argument(
         "--multigpu",
-        action="store_true",
-        help="Supports multiple GPUs on a single node.",
+        action=_DeprecatedMultiGPUAction,
+        help=(
+            "DEPRECATED (no-op): vanilla DataParallel training has been replaced "
+            "by DDP. Kept parseable for existing @-input files; ignored with a "
+            "warning and slated for removal in December 2026."
+        ),
     )
     parser.add_argument(
         "--Ngpus", action="store", type=int, default=1, help="Number of GPUs per node."
