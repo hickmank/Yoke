@@ -26,6 +26,60 @@ Note: reusable per-epoch/per-batch logic **already** lives in
 un-factored is the **orchestration layer** — the code *between* argument parsing
 and the epoch call. That is what this plan targets.
 
+## 1a. Scope-narrowing decisions (deprecations)
+
+Two axes of variation exist only to support a single outlier harness
+(`lsc_action`). Removing them collapses that outlier into the common path and
+makes `HarnessTrainer` markedly simpler (no `checkpoint_io` abstraction, no
+`parallel` mode switch). Both are approved simplifications:
+
+### 1a.1 Deprecate HDF5 checkpoint save/load
+
+- **Deprecate** `save_model_and_optimizer_hdf5` / `load_model_and_optimizer_hdf5`
+  in `src/yoke/utils/checkpointing.py`. The `.pth` path
+  (`save_model_and_optimizer` / `load_model_and_optimizer`) becomes the single
+  checkpoint format.
+- **Only one training harness** uses HDF5 checkpoints: `lsc_action`
+  (`train_lsc_action.py`, lines 26–27, 179, 291–294). It will be migrated to
+  `.pth`.
+- **Important — do NOT touch dataset caching.** `h5py` is also used for dataset
+  *caching* in `src/yoke/datasets/lsc_dataset.py` and
+  `src/yoke/datasets/load_npz_dataset.py`. That is unrelated to checkpointing and
+  **stays**. This deprecation is strictly about the two checkpoint functions.
+- **Downstream readers of existing `.hdf5` checkpoints** exist in evaluation
+  scripts: `applications/evaluation/parameters2image.py`,
+  `tk_parameters2image_slider.py`, `image_prediction_comparison.py`,
+  `lsc_loderunner_anime.py`, `lsc_loderunner_create_gif.py`. These load
+  *previously produced* artifacts. Handle via a deprecation window rather than
+  immediate removal (see below), so old checkpoints remain loadable while new
+  runs write `.pth`.
+- **Deprecation mechanics:** keep the two functions for now but emit a
+  `DeprecationWarning` (and a note in their docstrings pointing to the `.pth`
+  functions). Move their tests under an explicit "deprecated" marker so
+  `-Werror` still passes. Schedule hard removal for a later, separate PR once no
+  live `.hdf5` checkpoints need reading. This keeps the deprecation independent
+  of the trainer work.
+
+### 1a.2 Deprecate non-DDP / vanilla DataParallel training
+
+- **Deprecate** vanilla `nn.DataParallel` training and the `--multigpu` code
+  path. DDP becomes the single parallelism model for all harnesses.
+- **Only one training harness** uses `nn.DataParallel`: `lsc_action`
+  (`train_lsc_action.py`, lines 187–201, gated by `--multigpu`). It will be
+  migrated to the standard DDP flow (`setup_distributed` +
+  `DistributedDataParallel`, `make_distributed_dataloader`).
+- The `LodeRunner_DataParallel` class in `src/yoke/utils/parallel.py` is not used
+  by any harness (only by its own test, `tests/test_parallel_utils.py`). Mark it
+  deprecated alongside this change; remove in the same later cleanup PR as the
+  HDF5 functions.
+- The `--multigpu` argument in `yoke.helpers.cli.add_computing_args` becomes a
+  no-op/deprecated flag (keep it parseable to avoid breaking existing
+  `@`-input files, but warn and ignore).
+- Net effect: `HarnessTrainer` needs **no** `parallel` switch — it is always DDP.
+  The `mnist_surrogate` and `moving_mnist` demo scripts are single-process today
+  but do not use `DataParallel`; they are handled separately in Phase 3 and are
+  not affected by this deprecation.
+
 ## 2. The canonical training script (what is actually duplicated)
 
 The DDP scripts follow this exact sequence (see `se_DDP_loderunner`,
@@ -105,17 +159,19 @@ class HarnessTrainer:
             = build_adamw,
         scheduler_builder: Callable[...] | None = None,
         loss_builder: Callable[[], nn.Module] = default_mse_loss,
-        parallel: str = "ddp",          # "ddp" | "dp" | "single"
-        checkpoint_io: CheckpointIO = PthCheckpointIO(),  # or Hdf5CheckpointIO
         hooks: TrainerHooks | None = None,   # EMA, freezing, grad_clip, etc.
     ) -> None: ...
 
-    def setup(self) -> None:        # parallel init, model+opt (w/ continuation),
+    def setup(self) -> None:        # setup_distributed, model+opt (w/ continuation),
                                     # loss, DDP wrap, scheduler, dataloaders
     def train(self) -> None:        # timed epoch loop -> epoch_fn
-    def finalize(self) -> None:     # save checkpoint, continuation_setup+submit
+    def finalize(self) -> None:     # save .pth checkpoint, continuation_setup+submit
     def run(self) -> None:          # setup(); train(); finalize(); teardown()
 ```
+
+Because HDF5 checkpointing and non-DDP training are deprecated (Section 1a),
+there is **no** `parallel` mode switch and **no** `checkpoint_io` abstraction:
+the trainer is always DDP and always writes `.pth`.
 
 - **`model_builder`** returns `(model, model_args)` so `HarnessTrainer` can drive
   the continuation-vs-fresh branch (calling `load_model_and_optimizer` itself)
@@ -130,11 +186,15 @@ class HarnessTrainer:
   `on_epoch_start` (freeze scheduling), `on_before_save` (EMA companion save).
   This lets the EMA (`ch_ldrViT`), freezing (`ch_lsc_policy`), and fine-tuning
   (`se_DDP_loderunner_finetune_cylex`) scripts opt in without forking the loop.
-- **`checkpoint_io`** abstracts `.pth` vs HDF5 (`lsc_action`) and the
-  resubmission decision (some scripts, e.g. `moving_mnist`, never resubmit).
-- **`parallel`** selects DDP / DataParallel / single. DDP setup uses the existing
+- **Checkpointing** is always `.pth` via `save_model_and_optimizer` /
+  `load_model_and_optimizer` (HDF5 deprecated, Section 1a.1). The trainer still
+  owns the resubmission decision (some scripts, e.g. `moving_mnist`, never
+  resubmit) via a simple flag rather than an IO abstraction.
+- **Parallelism** is always DDP (vanilla DataParallel deprecated, Section 1a.2).
+  DDP setup uses the existing
   `yoke.utils.parallel.setup_distributed`/`cleanup_distributed` (already the
-  intended home; `ch_DDP_diffLDR` already imports them).
+  intended home; `ch_DDP_diffLDR` already imports them). No `parallel` switch.
+
 
 ### 4.2 Thin harness scripts
 
@@ -166,7 +226,10 @@ a generic CLI is a follow-up.
 This is a large surface. Propose an incremental, test-guarded rollout so nothing
 breaks:
 
-**Phase 0 — Extract obvious helpers (low risk).**
+**Phase 0 — Deprecations + extract obvious helpers (low risk).**
+- Deprecate HDF5 checkpoint functions and vanilla DataParallel / `--multigpu`
+  (Section 1a): add `DeprecationWarning`s, docstring notes, and mark their tests
+  deprecated so `-Werror` stays clean. (Hard removal is a later, separate PR.)
 - Replace every inlined `setup_distributed`/`cleanup_distributed` with the
   `yoke.utils.parallel` versions. (12 scripts; pure deletion + import.)
 - Add small builder helpers to `yoke.utils`: `build_adamw(args)`,
@@ -176,8 +239,8 @@ breaks:
 
 **Phase 1 — Introduce `HarnessTrainer` for the canonical DDP path.**
 - Implement the class covering the 7 near-identical scripts (LodeRunner /
-  LodeRunnerViT / cylex / reward / diffusion) with `parallel="ddp"`, `.pth`
-  checkpointing, and resubmission.
+  LodeRunnerViT / cylex / reward / diffusion) — always DDP, always `.pth`
+  checkpointing, with resubmission.
 - Migrate `se_DDP_loderunner`, `vt_DDP_loderunner`, `se_ldrViT`,
   `vt_DDP_ldrViT`, `se_DDP_loderunner_cylex` first. Fix the `vt_DDP_ldrViT`
   `model_class` bug and the cylex kwarg-spelling inconsistency during migration.
@@ -187,15 +250,22 @@ breaks:
 - Block freezing: `ch_lsc_policy`.
 - Backbone freeze / pretrained init: `se_DDP_loderunner_finetune_cylex`.
 
-**Phase 3 — Non-DDP / special cases (evaluate case-by-case).**
-- `lsc_action` (jit/compile, HDF5, DataParallel), `moving_mnist` (no resubmit,
-  plotting), `mnist_surrogate` (own loop). These may adopt `parallel="single"`
-  and `checkpoint_io=Hdf5CheckpointIO`, or be intentionally left as bespoke
-  scripts if forcing them into the trainer reduces clarity. Decide during
-  Phase 3.
+**Phase 3 — Fold in the former outlier + demo scripts.**
+- `lsc_action`: **migrate to the common path** — convert HDF5 → `.pth`
+  checkpointing and vanilla DataParallel → DDP (per Section 1a), drop
+  `--multigpu`, and **drop the `torch.jit.script`/`torch.compile` usage**
+  (removed outright — it never offered meaningful benefit). With the
+  deprecations done and compilation removed, this harness fits `HarnessTrainer`
+  directly.
+- `moving_mnist`, `mnist_surrogate`: demo/tutorial scripts (single-process, own
+  loops, no resubmission). Decide whether to adopt `HarnessTrainer` (with a
+  "no resubmission" flag) or intentionally keep them bespoke as minimal
+  references. These do not use DataParallel, so the deprecation does not force a
+  change; decide during Phase 3.
 
 **Lightning harness (`ch_lightning_loderunner`) is explicitly out of scope** —
 Lightning already owns the loop; wrapping it in `HarnessTrainer` adds nothing.
+
 
 ## 6. Testing strategy
 
@@ -208,7 +278,9 @@ Lightning already owns the loop; wrapping it in `HarnessTrainer` adds nothing.
     `model_class`/`model_args`, and only resubmits when not finished (monkeypatch
     `HarnessStudy.continuation_setup` and the submit call).
   - Hooks fire in the correct order (grad-clip before step, EMA after step).
-  - `parallel="single"` path runs on CPU without a process group (CI-friendly).
+  - The DDP orchestration is exercised on CPU via the `gloo` backend with a
+    single-process group (or by monkeypatching `setup_distributed`), so the
+    timed epoch loop, save, and resubmission logic are testable without GPUs.
 - **Migration guard:** for each migrated harness, keep behavior identical.
   Where feasible, add a tiny CPU/single-process smoke test that runs one or two
   fake batches end-to-end through the trainer.
@@ -225,22 +297,36 @@ Lightning already owns the loop; wrapping it in `HarnessTrainer` adds nothing.
   hatch). The goal is removing *copy-paste*, not forcing every script into one
   mold.
 - **DDP code is hard to unit test.** Cover the orchestration logic with a
-  single-process/CPU path and fakes; do not require GPUs in CI.
-- **Large diff.** Phasing keeps each PR reviewable; Phase 0 alone (parallel
-  helper de-duplication) is independently valuable and low-risk.
+  CPU `gloo` single-process group (or monkeypatched `setup_distributed`) and
+  fakes; do not require GPUs in CI.
+- **Large diff.** Phasing keeps each PR reviewable; the Phase 0 deprecations and
+  parallel-helper de-duplication are independently valuable and low-risk.
+- **Deprecation blast radius.** Deprecating HDF5 checkpoints affects evaluation
+  scripts that *read* old `.hdf5` files (Section 1a.1). Use a soft deprecation
+  window (warn, don't remove) so existing artifacts stay loadable until a later
+  removal PR. Do not conflate this with the separate `h5py` dataset-cache code,
+  which is untouched.
 
 ## 8. Deliverables checklist
 
-1. `src/yoke/harnesses/trainer.py` — `HarnessTrainer` (+ `TrainerHooks`,
-   `CheckpointIO` interface with `.pth` and HDF5 implementations).
-2. Builder helpers in `src/yoke/utils/` (optimizer/scheduler/checkpoint-name).
-3. Phase 0 de-duplication of `setup_distributed`/`cleanup_distributed`.
-4. Migrated canonical harness scripts (Phase 1), then hook-based ones (Phase 2).
-5. Tests under `tests/harnesses/` (and per-harness smoke tests where feasible).
-6. Docs: a new `docs/source/harness_trainer.rst` and a section in
+1. Phase 0 deprecations: `DeprecationWarning`s + docstring notes on the HDF5
+   checkpoint functions, `LodeRunner_DataParallel`, and the `--multigpu` flag;
+   tests updated to stay `-Werror` clean.
+2. `src/yoke/harnesses/trainer.py` — `HarnessTrainer` (+ `TrainerHooks`).
+   No `CheckpointIO` abstraction and no `parallel` switch (always `.pth`, always
+   DDP).
+3. Builder helpers in `src/yoke/utils/` (optimizer/scheduler/checkpoint-name).
+4. Phase 0 de-duplication of `setup_distributed`/`cleanup_distributed`.
+5. Migrated canonical harness scripts (Phase 1), then hook-based ones (Phase 2),
+   then `lsc_action` converted to `.pth` + DDP (Phase 3).
+6. Tests under `tests/harnesses/` (and per-harness smoke tests where feasible).
+7. Docs: a new `docs/source/harness_trainer.rst` and a section in
    `AGENTS.md`/`harnesses.rst` on authoring a harness with `HarnessTrainer`.
-7. Fix the two latent bugs surfaced by the survey (`vt_DDP_ldrViT` model_class;
+8. Fix the two latent bugs surfaced by the survey (`vt_DDP_ldrViT` model_class;
    cylex dataset kwarg spelling).
+9. (Later, separate PR) Hard-remove the deprecated HDF5 checkpoint functions,
+   `LodeRunner_DataParallel`, and `--multigpu` once no live `.hdf5` checkpoints
+   need reading.
 
 ## 9. Open questions
 
@@ -250,11 +336,15 @@ Lightning already owns the loop; wrapping it in `HarnessTrainer` adds nothing.
 2. **Optimizer/loss configurability.** They are effectively constant today.
    Expose them as builders now (future-proof) or hardcode the `AdamW` + masked
    MSE defaults and add configurability only when a study needs it?
-3. **Phase 3 inclusion.** Should `lsc_action`/`moving_mnist`/`mnist_surrogate`
-   be migrated, or intentionally kept bespoke as reference/demo scripts?
+3. **Demo scripts.** Should `moving_mnist`/`mnist_surrogate` adopt
+   `HarnessTrainer` (with a no-resubmission flag) or stay bespoke as minimal
+   references?
 4. **Eventual `yoke-train` CLI + registry** (Section 4.3): pursue after the class
    lands, or not at all?
 5. **Config surface.** Keep injecting Python callables/builders (maximally
    flexible), or move toward a declarative config (dataclass/dict) describing
    model/dataset/epoch/scheduler? The former fits the current `@`-file + CSV
    harness flow better; confirm.
+6. **Deprecation timeline.** How long a window before hard-removing the HDF5
+   checkpoint functions and DataParallel — next release, or gated on migrating
+   known old checkpoints?
