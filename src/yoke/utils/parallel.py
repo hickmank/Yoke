@@ -4,6 +4,7 @@ Some models within Yoke require specific modifications to PyTorch multi-GPU
 training utilities.
 
 """
+
 import os
 import warnings
 
@@ -70,6 +71,7 @@ def cleanup_distributed() -> None:
     initialized by setup_distributed().
     """
     dist.destroy_process_group()
+
 
 # Custom nn.DataParallel class to handle input to LodeRunner that should not be
 # split by batch.

@@ -38,6 +38,7 @@ navigable and follows consistent design principles.
 
    harnesses
    start_study
+   harness_trainer
    plot_loss
    loderunner_animate
    prediction_modes

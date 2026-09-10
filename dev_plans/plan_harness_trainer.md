@@ -1,5 +1,156 @@
 # Dev Plan: Streamline Harnesses with a Unifying `HarnessTrainer`
 
+---
+
+## 0. Implementation status (living log)
+
+**Completed: Phase 0 + Phase 1.** Remaining: Phase 2, Phase 3, and the later
+Dec-2026 hard-removal PR.
+
+### Phase 0 — DONE (deprecations + helpers + de-dup)
+
+- **HDF5 checkpoint deprecation** (`src/yoke/utils/checkpointing.py`):
+  `save_model_and_optimizer_hdf5` and `load_model_and_optimizer_hdf5` both emit
+  `DeprecationWarning`s and carry docstring notes stating the **Dec-2026** hard
+  removal. `load_*` is retained as a read-only shim; `save_*` is
+  write-deprecated. The `h5py` dataset *cache* code was left untouched.
+- **DataParallel / `--multigpu` deprecation**: `LodeRunner_DataParallel`
+  (`src/yoke/utils/parallel.py`) warns on construction (Dec-2026). `--multigpu`
+  is now a warn-and-ignore no-op implemented as a custom argparse action
+  `_DeprecatedMultiGPUAction` in `src/yoke/helpers/cli.py` (kept parseable so
+  existing `@`-input files don't break; always resolves to `False`).
+- **Builder helpers** added in **`src/yoke/utils/builders.py`** (NEW file, not
+  the pre-existing `parameters.py`): `build_adamw`, `move_optimizer_state_to_device`,
+  `compute_last_epoch`, `default_mse_loss`, `checkpoint_name`, and the
+  `build_from_checkpoint` factory (added during Phase 1). 100% test coverage in
+  `tests/utils/test_builders.py`.
+- **`setup_distributed`/`cleanup_distributed` de-duplication**: replaced the
+  inlined copies with imports from `yoke.utils.parallel` in the **7 scripts not
+  migrated in Phase 1** (`ch_lsc_policy`, `ch_lsc_inverse`, `ch_lsc_reward`,
+  `ch_DDP_loderunner`, `ch_ldrViT/train_ldrViT_2frame.py`,
+  `ch_ldrViT/train_ldrViT_ddp.py`, `se_DDP_loderunner_finetune_cylex`). The 5
+  Phase-1 scripts dropped their inlined copies as part of the full rewrite.
+- **Tests** updated to wrap deprecated calls in `pytest.warns` so `-Werror`
+  stays clean (`tests/test_checkpointing.py`, `tests/test_training_utils.py`,
+  `tests/test_parallel_utils.py`, `tests/helpers/test_cli.py`).
+
+### Phase 1 — DONE (`HarnessTrainer` + canonical migrations)
+
+- **`src/yoke/harnesses/trainer.py`** (NEW): `HarnessTrainer` + `TrainerHooks`.
+  Always DDP, always `.pth`; no `parallel` switch and no `CheckpointIO`
+  abstraction (per §1a). 100% line coverage via `tests/harnesses/test_trainer.py`
+  (DDP orchestration tested on CPU by monkeypatching
+  `setup_distributed`/`cleanup_distributed`, `DDP`, `make_distributed_dataloader`,
+  `dist.barrier`, `torch.cuda.synchronize`, `save_model_and_optimizer`,
+  `HarnessStudy.continuation_setup`, and `os.system`).
+- **`build_from_checkpoint`** factory covers the common fresh-vs-continue
+  `model_builder` pattern.
+- **5 canonical scripts migrated** to thin wrappers:
+  `se_DDP_loderunner`, `vt_DDP_loderunner`, `se_ldrViT`, `vt_DDP_ldrViT`,
+  `se_DDP_loderunner_cylex`.
+- **Latent bugs fixed**: `vt_DDP_ldrViT` now saves `model_class=LodeRunnerViT`
+  (previously referenced the undefined `LodeRunner`); the cylex kwarg-spelling
+  bug (`max_time_idx_offset` → `max_timeIDX_offset`) was fixed in
+  `se_DDP_loderunner_finetune_cylex` (a Phase-2 script — fixed opportunistically
+  since it is a clear latent bug; deliverable #8).
+- **Docs**: `docs/source/harness_trainer.rst` (added to the index toctree) and
+  an `AGENTS.md` §5a authoring section.
+
+### Verification (Phase 0 + 1)
+
+- `pytest -Werror`: all tests pass (593). Coverage 94% overall;
+  `trainer.py`/`builders.py` at 100%.
+- `ruff check` on the CI-linted set (`src`, `tests`, `applications/{evaluation,
+  filelists,normalization,viewers}`): the only remaining errors are **17
+  pre-existing** ones in untouched files (`noise_schedulers.py`,
+  `datastep/loderunner.py`, `epoch/loderunner.py`); **zero** introduced by this
+  work. `applications/harnesses/` is intentionally NOT part of the CI lint set,
+  but all migrated scripts nonetheless pass `ruff check` + `ruff format --check`.
+
+### Decisions / revelations during implementation
+
+1. **`model_builder` returns a 5-tuple, not the 3-tuple sketched in §4.1.** The
+   sketch showed `(model, model_args, starting_epoch)`. The real contract is
+   **`(model, model_args, model_class, starting_epoch, optimizer)`**:
+   - `model_class` is returned explicitly so the checkpoint's saved
+     `model_class` matches the built model (this is what kills the
+     `vt_DDP_ldrViT` bug structurally rather than by hand).
+   - `optimizer` is returned because on **continuation** the optimizer state
+     must be restored *together with* the model (that's how
+     `load_model_and_optimizer` works). The builder returns the restored
+     optimizer on continuation and `None` on a fresh run (the trainer then
+     builds one via `optimizer_builder`). This avoids double-constructing the
+     optimizer and keeps the restored state intact.
+2. **`build_from_checkpoint` takes `optimizer_kwargs` for the *reload* path
+   only.** Fresh-run optimizer construction still goes through the harness's
+   `optimizer_builder` (default `build_adamw`). Several scripts pass a bespoke
+   `optimizer_builder` because their fresh LR differs from the reload LR (e.g.
+   `se_DDP_loderunner` uses fresh `lr=1e-4` but the original reload used
+   `lr=1e-6`; cylex/reward use a fixed `lr=1e-6` with the scheduler driving the
+   effective LR). Behavior was preserved exactly.
+3. **`setup_distributed` now passes `device_id=device` to
+   `init_process_group`.** Two scripts (`ch_lsc_policy`, `ch_lsc_inverse`)
+   already did this (modern eager device binding); the other 9 did not. To
+   de-duplicate without changing behavior for those two, the canonical
+   `yoke.utils.parallel.setup_distributed` was updated to include `device_id`.
+   Harmless/beneficial for the rest.
+4. **The cylex "two scripts disagree" bug was in the *finetune* script.**
+   `se_DDP_loderunner_cylex` already used the correct `max_timeIDX_offset`; it
+   was `se_DDP_loderunner_finetune_cylex` that used the wrong
+   `max_time_idx_offset`. Fixed there.
+5. **`--multigpu` deprecation via a custom argparse action** (rather than
+   warning at consumption time) so the warning fires once at parse time and the
+   value is forced to `False` regardless of the `@`-file contents.
+6. **`epoch_kwargs` carries the per-epoch-fn variance** (`channel_map`,
+   `dataset` tag). The trainer assembles the fixed kwargs bundle and
+   `dict.update`s `epoch_kwargs` on top. EMA-aware epoch functions return an
+   `int` global-step; the trainer captures an `int` return into
+   `self.global_step` (unused by the Phase-1 scripts, but wired for Phase 2).
+7. **`finalize()` resubmission is submission-type aware.** It reads
+   `args.submissionType` (default `"slurm"`) and uses
+   `HarnessStudy.SUBMISSION_SYSTEMS[...]["submit"]` for the submit command
+   instead of hard-coding `sbatch`, and passes `submission_type` through to
+   `continuation_setup`. A `resubmit=False` flag disables resubmission entirely
+   (for future demo use).
+8. **Trainer methods stay small/overridable** (`setup_distributed`, `setup`,
+   `train`, `finalize`, `teardown`, `run`) as the §4.1 escape hatch.
+
+### Where to start next session (Phase 2)
+
+Phase 2 covers the deviating scripts via `TrainerHooks`:
+- **`ch_ldrViT` (both `train_ldrViT_ddp.py` and `train_ldrViT_2frame.py`)** —
+  EMA + gradient clipping. The `train_DDP_loderunner_epoch` signature already
+  accepts `ema_model`, `global_step`, `ema_update_after_step`, and `grad_clip`
+  kwargs, so these thread through `epoch_kwargs` plus `on_after_ddp_wrap`
+  (build the EMA `AveragedModel`), `on_after_step`/`on_before_save` (EMA update
+  + companion save), and the `global_step` return handling already wired in the
+  trainer. Grad-clip is passed to the epoch fn via `grad_clip` in
+  `epoch_kwargs` (the epoch fn does the clipping); confirm whether an
+  `on_before_optimizer_step` hook is actually needed or if `grad_clip` kwarg
+  suffices — likely the latter, so the hook may go unused for these two.
+- **`ch_lsc_policy`** — block-progressive (un)freezing (`on_epoch_start`) and
+  per-block param-group LRs (custom `optimizer_builder`). Uses
+  `train_lsc_policy_epoch`. Inspect its inlined freeze helpers.
+- **`se_DDP_loderunner_finetune_cylex`** — backbone freeze schedule +
+  pretrained-weight init. This needs a **bespoke `model_builder`** (load
+  pretrained, optionally strip/replace, freeze backbone for N epochs) plus an
+  `on_epoch_start` unfreeze hook. Note the kwarg-spelling bug here is already
+  fixed. Read its `_set_requires_grad`/`_freeze_*` helpers first.
+
+Practical starting point: read
+`applications/harnesses/ch_ldrViT/train_ldrViT_ddp.py` and
+`src/yoke/utils/ema.py`, then migrate `ch_ldrViT` first (it exercises the EMA +
+grad-clip hook surface end-to-end and validates the `global_step` plumbing).
+Add hook-ordering tests (grad-clip before step, EMA after step) — the
+`TrainerHooks` order test already exists as a template.
+
+**Phase 3** (later): migrate `lsc_action` to `.pth` + DDP (drop HDF5,
+`--multigpu`, and `torch.jit.script`/`torch.compile`); keep `moving_mnist` and
+`mnist_surrogate` bespoke. **Dec-2026 PR** (later): hard-remove the HDF5
+save+load functions, `LodeRunner_DataParallel`, and `--multigpu`.
+
+---
+
 ## 1. Motivation
 
 Every harness under `applications/harnesses/` ships a `train_*.py` script. Across
@@ -343,25 +494,31 @@ Lightning already owns the loop; wrapping it in `HarnessTrainer` adds nothing.
 
 ## 8. Deliverables checklist
 
-1. Phase 0 deprecations: `DeprecationWarning`s + docstring notes (all stating the
-   **Dec-2026** hard-removal date) on `save_model_and_optimizer_hdf5`,
+1. **[DONE]** Phase 0 deprecations: `DeprecationWarning`s + docstring notes (all
+   stating the **Dec-2026** hard-removal date) on `save_model_and_optimizer_hdf5`,
    `load_model_and_optimizer_hdf5` (retained as a read-only shim),
    `LodeRunner_DataParallel`, and the `--multigpu` flag; tests updated to stay
    `-Werror` clean.
-2. `src/yoke/harnesses/trainer.py` — `HarnessTrainer` (+ `TrainerHooks`).
+2. **[DONE]** `src/yoke/harnesses/trainer.py` — `HarnessTrainer` (+ `TrainerHooks`).
    No `CheckpointIO` abstraction and no `parallel` switch (always `.pth`, always
    DDP).
-3. Builder helpers in `src/yoke/utils/` (optimizer/scheduler/checkpoint-name).
-4. Phase 0 de-duplication of `setup_distributed`/`cleanup_distributed`.
-5. Migrated canonical harness scripts (Phase 1), then hook-based ones (Phase 2),
-   then `lsc_action` converted to `.pth` + DDP (Phase 3).
-6. Tests under `tests/harnesses/` (and per-harness smoke tests where feasible).
-7. Docs: a new `docs/source/harness_trainer.rst` and a section in
-   `AGENTS.md`/`harnesses.rst` on authoring a harness with `HarnessTrainer`.
-8. Fix the two latent bugs surfaced by the survey (`vt_DDP_ldrViT` model_class;
-   cylex dataset kwarg spelling).
-9. (Later, separate PR — **Dec-2026** target) Hard-remove the HDF5 checkpoint
-   save **and** load functions, `LodeRunner_DataParallel`, and `--multigpu`.
+3. **[DONE]** Builder helpers in `src/yoke/utils/builders.py` (`build_adamw`,
+   `move_optimizer_state_to_device`, `compute_last_epoch`, `default_mse_loss`,
+   `checkpoint_name`, `build_from_checkpoint`).
+4. **[DONE]** Phase 0 de-duplication of `setup_distributed`/`cleanup_distributed`.
+5. Migrated harness scripts: **[DONE] Phase 1** (`se_DDP_loderunner`,
+   `vt_DDP_loderunner`, `se_ldrViT`, `vt_DDP_ldrViT`, `se_DDP_loderunner_cylex`);
+   **[TODO] Phase 2** hook-based ones; **[TODO] Phase 3** `lsc_action`.
+6. **[DONE for Phase 1]** Tests under `tests/harnesses/` (`test_trainer.py`) and
+   `tests/utils/test_builders.py`. Per-harness smoke tests still optional/TODO.
+7. **[DONE]** Docs: `docs/source/harness_trainer.rst` (in the index toctree) and
+   an `AGENTS.md` §5a authoring section.
+8. **[DONE]** Fix the two latent bugs surfaced by the survey (`vt_DDP_ldrViT`
+   model_class — fixed structurally via the trainer's model_class handling;
+   cylex dataset kwarg spelling — fixed in `se_DDP_loderunner_finetune_cylex`).
+9. **[TODO — later, separate PR, Dec-2026 target]** Hard-remove the HDF5
+   checkpoint save **and** load functions, `LodeRunner_DataParallel`, and
+   `--multigpu`.
 
 ## 9. Open questions
 

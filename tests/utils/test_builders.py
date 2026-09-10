@@ -7,6 +7,7 @@ import torch.nn as nn
 
 from yoke.utils.builders import (
     build_adamw,
+    build_from_checkpoint,
     checkpoint_name,
     compute_last_epoch,
     default_mse_loss,
@@ -103,3 +104,64 @@ def test_checkpoint_name_formatting() -> None:
     """Checkpoint names zero-pad the study (3) and epoch (4) indices."""
     assert checkpoint_name(7, 12) == "study007_modelState_epoch0012.pth"
     assert checkpoint_name(123, 4567) == "study123_modelState_epoch4567.pth"
+
+
+def test_build_from_checkpoint_fresh() -> None:
+    """A fresh run constructs the model and returns None for the optimizer."""
+
+    def model_args_fn(args: argparse.Namespace) -> dict:
+        return {}
+
+    builder = build_from_checkpoint(_TinyNet, model_args_fn)
+    args = argparse.Namespace(continuation=False, checkpoint=None)
+    model, model_args, model_class, starting_epoch, optimizer = builder(
+        args, torch.device("cpu")
+    )
+
+    assert isinstance(model, _TinyNet)
+    assert model_args == {}
+    assert model_class is _TinyNet
+    assert starting_epoch == 0
+    assert optimizer is None
+
+
+def test_build_from_checkpoint_continuation(
+    tmp_path: object, monkeypatch: object
+) -> None:
+    """On continuation the builder reloads via load_model_and_optimizer."""
+    import yoke.utils.builders as builders_mod
+
+    sentinel_model = _TinyNet()
+    sentinel_opt = torch.optim.AdamW(sentinel_model.parameters(), lr=1e-4)
+
+    captured: dict = {}
+
+    def fake_load(
+        filepath: str,
+        optimizer_class: type,
+        optimizer_kwargs: dict,
+        available_models: dict,
+        device: object,
+    ) -> tuple[nn.Module, torch.optim.Optimizer, int]:
+        captured["filepath"] = filepath
+        captured["available_models"] = available_models
+        captured["optimizer_kwargs"] = optimizer_kwargs
+        return sentinel_model, sentinel_opt, 9
+
+    monkeypatch.setattr(builders_mod, "load_model_and_optimizer", fake_load)
+
+    builder = build_from_checkpoint(_TinyNet, lambda a: {"width": 3})
+    args = argparse.Namespace(
+        continuation=True, checkpoint="ck.pth", init_learnrate=2e-4
+    )
+    model, model_args, model_class, starting_epoch, optimizer = builder(
+        args, torch.device("cpu")
+    )
+
+    assert model is sentinel_model
+    assert optimizer is sentinel_opt
+    assert starting_epoch == 9
+    assert model_args == {"width": 3}
+    assert captured["filepath"] == "ck.pth"
+    assert captured["available_models"] == {"_TinyNet": _TinyNet}
+    assert captured["optimizer_kwargs"]["lr"] == 2e-4

@@ -41,7 +41,6 @@ class _DeprecatedMultiGPUAction(argparse.Action):
         setattr(namespace, self.dest, False)
 
 
-
 def add_default_args(parser: argparse.ArgumentParser = None) -> argparse.ArgumentParser:
     """Prepare a default ArgumentParser for harnesses.
 

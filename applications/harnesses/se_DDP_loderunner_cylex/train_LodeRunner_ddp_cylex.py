@@ -1,31 +1,30 @@
-import os
-import time
+"""DDP training harness for LodeRunner on the cx241203 (cylex) dataset.
+
+Thin wrapper around :class:`yoke.harnesses.trainer.HarnessTrainer`. Trains
+LodeRunner on the cylex temporal dataset using a small fixed optimizer LR
+(``1e-6``) and a cosine-with-warmup scheduler whose peak LR is scaled by the
+global batch size. The epoch function is told it is operating on the ``cylex``
+dataset.
+"""
+
 import argparse
+
 import numpy as np
-import torch
-import torch.nn as nn
-import torch.distributed as dist
-from torch.nn.parallel import DistributedDataParallel as DDP
 
-from yoke.models.vit.swin.bomberman import LodeRunner
 from yoke.datasets.load_npz_dataset import TemporalDataSet
-
-from yoke.utils.training.epoch.loderunner import train_DDP_loderunner_epoch
-from yoke.harnesses.base import HarnessStudy
-from yoke.utils.dataload import make_distributed_dataloader
-from yoke.utils.checkpointing import load_model_and_optimizer
-from yoke.utils.checkpointing import save_model_and_optimizer
-
-from yoke.lr_schedulers import CosineWithWarmupScheduler
+from yoke.harnesses.trainer import HarnessTrainer
 from yoke.helpers import cli
-
+from yoke.lr_schedulers import CosineWithWarmupScheduler
+from yoke.models.vit.swin.bomberman import LodeRunner
+from yoke.utils.builders import build_adamw, build_from_checkpoint
+from yoke.utils.training.epoch.loderunner import train_DDP_loderunner_epoch
 
 #############################################
 # Inputs
 #############################################
 descr_str = (
     "Uses DDP to train LodeRunner architecture on single-timstep input and output "
-    "of the lsc240420 per-material density fields."
+    "of the cx241203 (cylex) per-material fields."
 )
 parser = argparse.ArgumentParser(
     prog="DDP LodeRunner Training", description=descr_str, fromfile_prefix_chars="@"
@@ -44,240 +43,114 @@ parser.set_defaults(
     test_filelist="cx241203_prefixes_test_10pct.txt",
 )
 
+#############################################
+# Study-specific constants
+#############################################
+# 4 kinematic + 39 thermodynamic variable fields.
+DEFAULT_VARS = [
+    "Rcoord",
+    "Zcoord",
+    "Uvelocity",
+    "Wvelocity",
+    "density_Air",
+    "energy_Air",
+    "pressure_Air",
+    "density_Al",
+    "energy_Al",
+    "pressure_Al",
+    "density_Be",
+    "energy_Be",
+    "pressure_Be",
+    "density_booster",
+    "energy_booster",
+    "pressure_booster",
+    "density_Cu",
+    "energy_Cu",
+    "pressure_Cu",
+    "density_U.DU",
+    "energy_U.DU",
+    "pressure_U.DU",
+    "density_maincharge",
+    "energy_maincharge",
+    "pressure_maincharge",
+    "density_N",
+    "energy_N",
+    "pressure_N",
+    "density_Sn",
+    "energy_Sn",
+    "pressure_Sn",
+    "density_Steel.alloySS304L",
+    "energy_Steel.alloySS304L",
+    "pressure_Steel.alloySS304L",
+    "density_Polymer.Sylgard",
+    "energy_Polymer.Sylgard",
+    "pressure_Polymer.Sylgard",
+    "density_Ta",
+    "energy_Ta",
+    "pressure_Ta",
+    "density_Void",
+    "energy_Void",
+    "pressure_Void",
+    "density_Water",
+    "energy_Water",
+    "pressure_Water",
+]
 
-def setup_distributed():
-    # ----- 1) Basic setup & environment variables -----
-    # Rely on Slurm variables: SLURM_PROCID, SLURM_NTASKS, SLURM_LOCALID, etc.
-    rank = int(os.environ["SLURM_PROCID"])  # global rank
-    world_size = int(os.environ["SLURM_NTASKS"])  # total number of processes
-    local_rank = int(os.environ["SLURM_LOCALID"])  # local rank (GPU index on this node)
+# Optimizer learning rate (fixed; the scheduler drives the effective LR).
+OPTIMIZER_LR = 1e-6
 
-    master_addr = os.environ["MASTER_ADDR"]
-    master_port = os.environ["MASTER_PORT"]
-
-    print("============================", flush=True)
-    print(f"[Rank {rank}] DDP setup, master_addr: {master_addr}", flush=True)
-    print(f"[Rank {rank}] DDP setup, master_port: {master_port}", flush=True)
-    print(f"[Rank {rank}] DDP setup, rank: {rank}", flush=True)
-    print(f"[Rank {rank}] DDP setup, local_rank: {local_rank}", flush=True)
-    print(f"[Rank {rank}] DDP setup, world_size: {world_size}", flush=True)
-    print("============================", flush=True)
-
-    # ----- 2) Set the current GPU device for this process -----
-    torch.cuda.set_device(local_rank)
-    device = torch.device(f"cuda:{local_rank}")
-
-    # ----- 3) Initialize the process group -----
-    dist.init_process_group(
-        backend="nccl",
-        init_method=f"tcp://{master_addr}:{master_port}",
-        world_size=world_size,
-        rank=rank,
-    )
-
-    return rank, world_size, local_rank, device
+# Reference global batch size used to normalize the LR scaling (1 node, 4 GPUs,
+# 10 samples/GPU).
+REFERENCE_BATCHSIZE = 40.0
 
 
-def cleanup_distributed():
-    # ----- 8) Clean up (optional) -----
-    dist.destroy_process_group()
+def make_model_args(args: argparse.Namespace) -> dict:
+    """Build the LodeRunner ``model_args`` dict for the cylex study.
 
+    Args:
+        args (argparse.Namespace): Parsed command-line arguments.
 
-def main(args, rank, world_size, local_rank, device):
-    #############################################
-    # Process Inputs
-    #############################################
-    # Study ID
-    studyIDX = args.studyIDX
-
-    # Resources
-    Ngpus = args.Ngpus
-    Knodes = args.Knodes
-
-    # Data Paths
-    train_filelist = args.FILELIST_DIR + args.train_filelist
-    validation_filelist = args.FILELIST_DIR + args.validation_filelist
-    test_filelist = args.FILELIST_DIR + args.test_filelist
-
-    # Model Parameters
-    embed_dim = args.embed_dim
-    block_structure = tuple(args.block_structure)
-
-    # Training Parameters
-    anchor_lr = args.anchor_lr
-    num_cycles = args.num_cycles
-    min_fraction = args.min_fraction
-    terminal_steps = args.terminal_steps
-    warmup_steps = args.warmup_steps
-
-    # Number of workers controls how batches of data are prefetched and,
-    # possibly, pre-loaded onto GPUs. If the number of workers is large they
-    # will swamp memory and jobs will fail.
-    num_workers = args.num_workers
-
-    # Epoch Parameters
-    batch_size = args.batch_size
-    total_epochs = args.total_epochs
-    cycle_epochs = args.cycle_epochs
-    train_batches = args.train_batches
-    val_batches = args.val_batches
-    train_per_val = args.TRAIN_PER_VAL
-    trn_rcrd_filename = args.trn_rcrd_filename
-    val_rcrd_filename = args.val_rcrd_filename
-    CONTINUATION = args.continuation
-    START = not CONTINUATION
-    checkpoint = args.checkpoint
-
-    # Dictionary of available models.
-    available_models = {
-        "LodeRunner": LodeRunner
-    }
-    
-    #############################################
-    # Model Arguments for Dynamic Reconstruction
-    #############################################
-    model_args = {
-        "default_vars": [
-            "Rcoord",  # 4 kinematic variable fields
-            "Zcoord",
-            "Uvelocity",
-            "Wvelocity",
-            "density_Air",  # 39 thermodynamic variable fields
-            "energy_Air",
-            "pressure_Air",
-            "density_Al",
-            "energy_Al",
-            "pressure_Al",
-            "density_Be",
-            "energy_Be",
-            "pressure_Be",
-            "density_booster",
-            "energy_booster",
-            "pressure_booster",
-            "density_Cu",
-            "energy_Cu",
-            "pressure_Cu",
-            "density_U.DU",
-            "energy_U.DU",
-            "pressure_U.DU",
-            "density_maincharge",
-            "energy_maincharge",
-            "pressure_maincharge",
-            "density_N",
-            "energy_N",
-            "pressure_N",
-            "density_Sn",
-            "energy_Sn",
-            "pressure_Sn",
-            "density_Steel.alloySS304L",
-            "energy_Steel.alloySS304L",
-            "pressure_Steel.alloySS304L",
-            "density_Polymer.Sylgard",
-            "energy_Polymer.Sylgard",
-            "pressure_Polymer.Sylgard",
-            "density_Ta",
-            "energy_Ta",
-            "pressure_Ta",
-            "density_Void",
-            "energy_Void",
-            "pressure_Void",
-            "density_Water",
-            "energy_Water",
-            "pressure_Water",
-        ],
+    Returns:
+        dict: Keyword arguments for constructing :class:`LodeRunner`.
+    """
+    return {
+        "default_vars": DEFAULT_VARS,
         "image_size": (1120, 400),
         "patch_size": (10, 5),
-        "embed_dim": embed_dim,
+        "embed_dim": args.embed_dim,
         "emb_factor": 2,
         "num_heads": 8,
-        "block_structure": block_structure,
+        "block_structure": tuple(args.block_structure),
         "window_sizes": [(8, 8), (8, 8), (4, 4), (2, 2)],
         "patch_merge_scales": [(2, 2), (2, 2), (2, 2)],
     }
 
-    #############################################
-    # Load Model for Continuation (Rank 0 only)
-    #############################################
-    # Wait to move model to GPU until after the checkpoint load. Then
-    # explicitly move model and optimizer state to GPU.
-    if CONTINUATION:
-        model, optimizer, starting_epoch = load_model_and_optimizer(
-            checkpoint,
-            optimizer_class=torch.optim.AdamW,
-            optimizer_kwargs={
-                "lr": 1e-6,
-                "betas": (0.9, 0.999),
-                "eps": 1e-08,
-                "weight_decay": 0.01,
-            },
-            available_models=available_models,
-            device=device,
-        )
-        print("Model state loaded for continuation.")
-    else:
-        # Initialize model and optimizer state.
-        # If not continuing, set starting_epoch to 0.
-        starting_epoch = 0
-        model = LodeRunner(**model_args)
-        # Move model to GPU before instantiating optimizer and DDP.
-        model.to(device)
 
-        # Instantiate optimizer and move state to GPU.
-        optimizer = torch.optim.AdamW(
-            model.parameters(),
-            lr=1e-6,
-            betas=(0.9, 0.999),
-            eps=1e-08,
-            weight_decay=0.01
-        )
+def build_optimizer(model: object, args: argparse.Namespace) -> object:
+    """Build the AdamW optimizer at the fixed cylex learning rate.
 
-        for state in optimizer.state.values():
-            for key, value in state.items():
-                if isinstance(value, torch.Tensor):
-                    state[key] = value.to(device)
+    Args:
+        model (object): Model whose parameters are optimized.
+        args (argparse.Namespace): Parsed command-line arguments.
 
-    #############################################
-    # Initialize Loss
-    #############################################
-    # Use `reduction='none'` so loss on each sample in batch can be recorded.
-    loss_fn = nn.MSELoss(reduction="none")
+    Returns:
+        torch.optim.AdamW: The optimizer.
+    """
+    return build_adamw(model, args, lr=OPTIMIZER_LR, weight_decay=0.01)
 
-    #############################################
-    # Move Model to DistributedDataParallel
-    #############################################
-    model = DDP(model, device_ids=[local_rank], output_device=local_rank)
 
-    #############################################
-    # Learning Rate Scheduler
-    #############################################
-    if starting_epoch == 0:
-        last_epoch = -1
-    else:
-        last_epoch = train_batches * (starting_epoch - 1)
+def build_dataset(args: argparse.Namespace) -> tuple[object, object]:
+    """Build the train/validation cylex temporal datasets.
 
-    # Scale the anchor LR by global batchsize
-    #
-    # # For multi-node
-    lr_scale = np.sqrt(float(Ngpus) * float(Knodes) * float(batch_size))
-    original_batchsize = 40.0  # 1 node, 4 gpus, 10 samples/gpu
-    ddp_anchor_lr = anchor_lr * lr_scale / original_batchsize
-    #
-    # For single node
-    # ddp_anchor_lr = anchor_lr
-    
-    LRsched = CosineWithWarmupScheduler(
-        optimizer,
-        anchor_lr=ddp_anchor_lr,
-        terminal_steps=terminal_steps,
-        warmup_steps=warmup_steps,
-        num_cycles=num_cycles,
-        min_fraction=min_fraction,
-        last_epoch=last_epoch,
-    )
+    Args:
+        args (argparse.Namespace): Parsed command-line arguments.
 
-    #############################################
-    # Data Initialization (Distributed Dataloader)
-    #############################################
+    Returns:
+        tuple: ``(train_dataset, val_dataset)``.
+    """
+    train_filelist = args.FILELIST_DIR + args.train_filelist
+    validation_filelist = args.FILELIST_DIR + args.validation_filelist
+
     train_dataset = TemporalDataSet(
         args.NPZ_DIR,
         args.CSV_FILEPATH,
@@ -294,110 +167,55 @@ def main(args, rank, world_size, local_rank, device):
         max_file_checks=10,
         half_image=True,
     )
+    return train_dataset, val_dataset
 
-    # NOTE: For DDP the batch_size is the per-GPU batch_size!!!
-    train_dataloader = make_distributed_dataloader(
-        train_dataset,
-        batch_size,
-        shuffle=True,
-        num_workers=num_workers,
-        rank=rank,
-        world_size=world_size,
+
+def build_scheduler(
+    optimizer: object, args: argparse.Namespace, last_epoch: int
+) -> CosineWithWarmupScheduler:
+    """Build the cosine-with-warmup scheduler with batch-size-scaled peak LR.
+
+    Args:
+        optimizer (object): Optimizer the scheduler wraps.
+        args (argparse.Namespace): Parsed command-line arguments.
+        last_epoch (int): Scheduler ``last_epoch`` for continuation.
+
+    Returns:
+        CosineWithWarmupScheduler: The learning-rate scheduler.
+    """
+    # Scale the anchor LR by the global batch size.
+    lr_scale = np.sqrt(float(args.Ngpus) * float(args.Knodes) * float(args.batch_size))
+    ddp_anchor_lr = args.anchor_lr * lr_scale / REFERENCE_BATCHSIZE
+
+    return CosineWithWarmupScheduler(
+        optimizer,
+        anchor_lr=ddp_anchor_lr,
+        terminal_steps=args.terminal_steps,
+        warmup_steps=args.warmup_steps,
+        num_cycles=args.num_cycles,
+        min_fraction=args.min_fraction,
+        last_epoch=last_epoch,
     )
-    val_dataloader = make_distributed_dataloader(
-        val_dataset,
-        batch_size,
-        shuffle=False,
-        num_workers=num_workers,
-        rank=rank,
-        world_size=world_size,
-    )
-
-    #############################################
-    # Training Loop (Modified for DDP)
-    #############################################
-    # Train Model
-    print("Training Model . . .")
-    starting_epoch += 1
-    ending_epoch = min(starting_epoch + cycle_epochs, total_epochs + 1)
-
-    TIME_EPOCH = True
-    for epochIDX in range(starting_epoch, ending_epoch):
-        train_sampler = train_dataloader.sampler
-        train_sampler.set_epoch(epochIDX)
-
-        # For timing epochs
-        if TIME_EPOCH:
-            # Synchronize before starting the timer
-            dist.barrier()  # Ensure that all nodes sync
-            torch.cuda.synchronize(device)  # Ensure GPUs on each node sync
-            # Time each epoch and print to stdout
-            startTime = time.time()
-
-        # Train and Validate
-        train_DDP_loderunner_epoch(
-            training_data=train_dataloader,
-            validation_data=val_dataloader,
-            dataset='cylex',
-            num_train_batches=train_batches,
-            num_val_batches=val_batches,
-            model=model,
-            optimizer=optimizer,
-            loss_fn=loss_fn,
-            LRsched=LRsched,
-            epochIDX=epochIDX,
-            train_per_val=train_per_val,
-            train_rcrd_filename=trn_rcrd_filename,
-            val_rcrd_filename=val_rcrd_filename,
-            device=device,
-            rank=rank,
-            world_size=world_size,
-        )
-
-        if TIME_EPOCH:
-            # Synchronize before stopping the timer
-            torch.cuda.synchronize(device)  # Ensure GPUs on each node sync
-            dist.barrier()  # Ensure that all nodes sync
-            # Time each epoch and print to stdout
-            endTime = time.time()
-
-        epoch_time = (endTime - startTime) / 60
-
-        # Print Summary Results
-        if rank == 0:
-            print(f"Completed epoch {epochIDX}...", flush=True)
-            print(f"Epoch time (minutes): {epoch_time:.2f}", flush=True)
-
-    # Save model and optimizer state in hdf5
-    chkpt_name_str = "study{0:03d}_modelState_epoch{1:04d}.pth"
-    new_chkpt_path = os.path.join("./", chkpt_name_str.format(studyIDX, epochIDX))
-
-    save_model_and_optimizer(
-        model, 
-        optimizer, 
-        epochIDX,
-        new_chkpt_path, 
-        model_class=LodeRunner,
-        model_args=model_args
-    )
-
-    if rank == 0:
-        #############################################
-        # Continue if Necessary
-        #############################################
-        FINISHED_TRAINING = epochIDX + 1 > total_epochs
-        if not FINISHED_TRAINING:
-            new_slurm_file = HarnessStudy.continuation_setup(
-                new_chkpt_path, studyIDX, last_epoch=epochIDX
-            )
-            os.system(f"sbatch {new_slurm_file}")
 
 
 if __name__ == "__main__":
     args = parser.parse_args()
 
-    rank, world_size, local_rank, device = setup_distributed()
-
-    main(args, rank, world_size, local_rank, device)
-
-    cleanup_distributed()
+    HarnessTrainer(
+        args,
+        model_builder=build_from_checkpoint(
+            LodeRunner,
+            make_model_args,
+            optimizer_kwargs={
+                "lr": OPTIMIZER_LR,
+                "betas": (0.9, 0.999),
+                "eps": 1e-8,
+                "weight_decay": 0.01,
+            },
+        ),
+        dataset_builder=build_dataset,
+        epoch_fn=train_DDP_loderunner_epoch,
+        optimizer_builder=build_optimizer,
+        scheduler_builder=build_scheduler,
+        epoch_kwargs={"dataset": "cylex"},
+    ).run()

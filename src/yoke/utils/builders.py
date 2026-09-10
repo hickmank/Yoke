@@ -10,9 +10,16 @@ change.
 """
 
 import argparse
+from collections.abc import Callable
 
 import torch
 import torch.nn as nn
+
+from yoke.utils.checkpointing import load_model_and_optimizer
+
+# A ``model_builder`` for HarnessTrainer returns
+# (model, model_args, model_class, starting_epoch, optimizer|None).
+ModelBuilderReturn = tuple[nn.Module, dict, type, int, "torch.optim.Optimizer | None"]
 
 
 def build_adamw(
@@ -126,3 +133,72 @@ def checkpoint_name(studyIDX: int, epochIDX: int) -> str:
         str: Filename of the form ``study{IDX:03d}_modelState_epoch{E:04d}.pth``.
     """
     return f"study{studyIDX:03d}_modelState_epoch{epochIDX:04d}.pth"
+
+
+def build_from_checkpoint(
+    model_class: type,
+    model_args_fn: Callable[[argparse.Namespace], dict],
+    *,
+    optimizer_class: type = torch.optim.AdamW,
+    optimizer_kwargs: dict | None = None,
+) -> Callable[[argparse.Namespace, torch.device], ModelBuilderReturn]:
+    """Build a ``HarnessTrainer`` ``model_builder`` for the fresh-vs-continue pattern.
+
+    This helper covers the common case where a study builds a model fresh from
+    ``model_args`` on a first launch and reloads the *same* architecture from a
+    ``.pth`` checkpoint on continuation. For studies that perform architectural
+    surgery (strip/replace layers, load a partial backbone), write a bespoke
+    ``model_builder`` instead.
+
+    The returned callable matches the
+    :data:`yoke.harnesses.trainer.ModelBuilder` contract, returning
+    ``(model, model_args, model_class, starting_epoch, optimizer)`` where
+    ``optimizer`` is ``None`` on a fresh run (so the trainer builds it) and the
+    restored optimizer on continuation.
+
+    Args:
+        model_class (type): The model class to instantiate/save.
+        model_args_fn (Callable[[argparse.Namespace], dict]): Callable mapping
+            parsed args to the ``model_args`` dict passed to ``model_class``.
+        optimizer_class (type): Optimizer class used when reloading on
+            continuation. Defaults to :class:`torch.optim.AdamW`.
+        optimizer_kwargs (dict | None): Keyword arguments for the reload-time
+            optimizer. When ``None``, defaults to the canonical AdamW settings
+            with ``lr`` taken from ``args.init_learnrate`` (fallback ``1e-4``).
+
+    Returns:
+        Callable: A ``model_builder`` suitable for :class:`HarnessTrainer`.
+    """
+
+    def _model_builder(
+        args: argparse.Namespace, device: torch.device
+    ) -> tuple[nn.Module, dict, type, int, torch.optim.Optimizer | None]:
+        """Construct the model fresh or reload it from a checkpoint."""
+        model_args = model_args_fn(args)
+        available_models = {model_class.__name__: model_class}
+
+        if getattr(args, "continuation", False):
+            kwargs = optimizer_kwargs
+            if kwargs is None:
+                kwargs = {
+                    "lr": getattr(args, "init_learnrate", 1e-4),
+                    "betas": (0.9, 0.999),
+                    "eps": 1e-8,
+                    "weight_decay": getattr(args, "weight_decay", 0.01),
+                }
+            model, optimizer, starting_epoch = load_model_and_optimizer(
+                args.checkpoint,
+                optimizer_class=optimizer_class,
+                optimizer_kwargs=kwargs,
+                available_models=available_models,
+                device=device,
+            )
+            print("Model state loaded for continuation.")
+            return model, model_args, model_class, starting_epoch, optimizer
+
+        # Fresh construction.
+        model = model_class(**model_args)
+        model.to(device)
+        return model, model_args, model_class, 0, None
+
+    return _model_builder

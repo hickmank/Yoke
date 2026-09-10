@@ -169,6 +169,47 @@ Design points baked into the code:
 
 ---
 
+## 5a. Authoring a training harness with `HarnessTrainer`
+
+Non-Lightning DDP training harnesses should be thin wrappers around
+`yoke.harnesses.trainer.HarnessTrainer` rather than copies of a ~450-line
+`train_*.py`. The trainer owns the fixed orchestration (DDP setup via
+`yoke.utils.parallel.setup_distributed`/`cleanup_distributed`, model/optimizer/
+scheduler/dataloader construction, the timed epoch loop, `.pth` checkpointing
+via `save_model_and_optimizer`, and continuation resubmission). It is **always
+DDP** and **always writes `.pth`** (HDF5 checkpoint writing and vanilla
+`DataParallel`/`--multigpu` are deprecated for **Dec-2026** removal).
+
+A harness injects only what varies:
+
+- `model_builder(args, device) -> (model, model_args, model_class, start_epoch, optimizer)`
+  — owns *both* fresh and continuation paths; returns the model class so the
+  saved `model_class` matches the built model (this killed the `vt_DDP_ldrViT`
+  mismatch bug). Use `yoke.utils.builders.build_from_checkpoint(model_class,
+  make_model_args, optimizer_kwargs=...)` for the common fresh-vs-continue case;
+  write a bespoke builder for architectural surgery (pretrained backbone,
+  strip/replace layers).
+- `dataset_builder(args) -> (train_dataset, val_dataset)`.
+- `epoch_fn` — an existing `yoke.utils.training.epoch` function; per-study extra
+  kwargs (`channel_map`, `dataset` tag, EMA) go through `epoch_kwargs`.
+- `optimizer_builder` (default `yoke.utils.builders.build_adamw`),
+  `scheduler_builder` (optional), `loss_builder` (default
+  `yoke.utils.builders.default_mse_loss`).
+
+Dynamic in-loop behavior (EMA, grad-clip, progressive unfreeze) uses the
+composable `TrainerHooks` (`on_after_ddp_wrap`, `on_epoch_start`,
+`on_before_optimizer_step`, `on_after_step`, `on_before_save`). See
+`applications/harnesses/se_DDP_loderunner/train_LodeRunner_ddp.py` for a
+migrated example and `docs/source/harness_trainer.rst` for the full write-up.
+`moving_mnist` and `mnist_surrogate` are intentionally kept as bespoke,
+single-process demo scripts and do **not** use `HarnessTrainer`.
+
+Shared builder helpers live in `yoke.utils.builders` (`build_adamw`,
+`move_optimizer_state_to_device`, `compute_last_epoch`, `default_mse_loss`,
+`checkpoint_name`, `build_from_checkpoint`).
+
+---
+
 ## 6. Conventions & expectations for changes
 
 - **Put reusable logic in `src/yoke`**, not in harness scripts. Harnesses should orchestrate
