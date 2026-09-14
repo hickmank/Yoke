@@ -146,7 +146,7 @@ class TestDDPArrayDataStep:
         loss_fn = nn.MSELoss(reduction="none")
 
         truth_out, pred_out, all_losses = eval_DDP_array_datastep(
-            (inpt, truth), model, None, loss_fn, device, rank=0, world_size=1
+            (inpt, truth), model, loss_fn, device, rank=0, world_size=1
         )
 
         assert torch.allclose(truth_out, truth)
@@ -169,7 +169,7 @@ class TestDDPArrayDataStep:
 
         initial = copy.deepcopy(list(model.parameters()))
         _ = eval_DDP_array_datastep(
-            (inpt, truth), model, None, loss_fn, device, rank=0, world_size=1
+            (inpt, truth), model, loss_fn, device, rank=0, world_size=1
         )
         after = list(model.parameters())
         for init, aft in zip(initial, after):

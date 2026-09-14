@@ -4,8 +4,51 @@
 
 ## 0. Implementation status (living log)
 
-**Completed: Phase 0 + Phase 1 + Phase 2.** Remaining: Phase 3 and the later
-Dec-2026 hard-removal PR.
+**Completed: Phase 0 + Phase 1 + Phase 2 + Phase 3.** Remaining: only the later
+Dec-2026 hard-removal PR (deliverable #9).
+
+### Phase 3 — DONE (`lsc_action` migrated + latent bug fixed)
+
+- **`lsc_action` (`train_lsc_action.py`) — DONE (rebuilt from scratch).** The
+  script was the last outlier and was thoroughly stale: it imported a
+  nonexistent `train_array_csv_epoch` (only present in an old `.pyc` of the
+  removed `torch_training_utils` module), wrote HDF5 checkpoints, used
+  `nn.DataParallel`/`--multigpu`, and ran `torch.jit.script` + `torch.compile`.
+  Per guidance it was treated as a from-scratch rebuild that keeps the *intent*
+  (the `tCNNsurrogate` geometry->density-field model + the LSC contour dataset)
+  but targets modern Yoke:
+  - Thin `HarnessTrainer` wrapper: always DDP, `.pth` checkpointing,
+    `build_from_checkpoint` model_builder, fixed-LR AdamW (`1e-6`) + a
+    **cosine-with-warmup scheduler** (added even though the legacy script had no
+    working scheduler — the CSV already carried the cosine columns).
+  - Epoch fn is `train_DDP_array_epoch` (the DDP array-output path).
+  - **Dropped**: HDF5 save/load, `DataParallel`/`--multigpu`,
+    `torch.jit.script`/`torch.compile`, the SLURM-env `num_workers` hack, and the
+    harness-local `ButterfliedDataset`/`mirror_transform`.
+  - **Reflection now comes from the dataset**: `LSC_cntr2hfield_DataSet(...,
+    half_image=False)` returns the full reflected `(1, 1120, 800)` density
+    field, so the model's `output_image_size=(1120, 800)` matches the target.
+    (The old butterfly wrapper double-concatenated to width 1600 while the model
+    output stayed 800 — a stale shape-mismatch bug now gone.)
+  - **`training_input.tmpl`** updated to feed the cosine-scheduler args
+    (`anchor_lr`/`num_cycles`/`min_fraction`/`terminal_steps`/`warmup_steps`,
+    all present as CSV columns) instead of the now-unused `init_learnrate`.
+  - **Verification (CPU, real model):** fresh `model_builder` returns
+    `tCNNsurrogate`/epoch 0/`None` optimizer; forward maps `(B, 28)` ->
+    `(B, 1, 1120, 800)` (matches the dataset target); optimizer LR `1e-6`;
+    cosine scheduler `anchor_lr` wired; `model_args` are class-aware for `.pth`
+    reload.
+- **Latent bug fixed in `src/yoke` (blocking prerequisite).**
+  `train_DDP_array_epoch` calls `eval_DDP_array_datastep(valdata, model,
+  loss_fn, device, rank, world_size)` (6 args), but `eval_DDP_array_datastep`
+  was defined with a spurious, unused `optimizer` parameter (7 params, no
+  defaults) -> any real validation pass raised `TypeError`. The existing epoch
+  tests masked it by monkeypatching the datastep with `*args` stubs. Fix:
+  **removed the unused `optimizer` param** from `eval_DDP_array_datastep`
+  (aligning it with the non-DDP `eval_array_datastep`), and updated the two
+  datastep tests in `tests/utils/training/datastep/test_ddp_array_datastep.py`
+  that passed `None` for it. This also fixes the other user of the epoch fn,
+  `ch_lsc_inverse`. All array epoch/datastep tests pass.
 
 ### Phase 2 — DONE (deviating scripts via hooks / bespoke builders)
 
@@ -218,36 +261,37 @@ Dec-2026 hard-removal PR.
 8. **Trainer methods stay small/overridable** (`setup_distributed`, `setup`,
    `train`, `finalize`, `teardown`, `run`) as the §4.1 escape hatch.
 
-### Where to start next session (Phase 3)
+### Where to start next session (Dec-2026 hard-removal PR)
 
-**Phase 2 is complete** (`ch_ldrViT` x2, `ch_lsc_policy`, and
-`se_DDP_loderunner_finetune_cylex` — see the Phase 2 progress log above). The
-remaining migration work is **Phase 3**:
+**All migration phases are complete** — Phases 0-3 are done. Every non-Lightning
+DDP harness now runs through `HarnessTrainer`; `moving_mnist` and
+`mnist_surrogate` remain intentionally bespoke (Q3); `ch_lightning_loderunner`
+is out of scope.
 
-- **`lsc_action`** — the former outlier. Migrate to the common path: convert
-  HDF5 -> `.pth` checkpointing and vanilla `DataParallel` -> DDP (both already
-  deprecated in Phase 0), drop `--multigpu`, and drop the
-  `torch.jit.script`/`torch.compile` usage (removed outright). With those gone
-  it should fit `HarnessTrainer` directly via `build_from_checkpoint` (or a
-  bespoke `model_builder` if the action-network reload differs). Read
-  `applications/harnesses/lsc_action/train_lsc_action.py` first (HDF5 usage at
-  lines ~26-27, 179, 291-294; `DataParallel` at ~187-201).
-- **`moving_mnist`, `mnist_surrogate`** — stay bespoke (Q3); no change.
+The **only remaining work** is the later **Dec-2026 hard-removal PR**
+(deliverable #9): hard-remove the now-unused deprecated code paths:
 
-Also still open: the **Dec-2026 hard-removal PR** (deliverable #9) — hard-remove
-the HDF5 save+load functions, `LodeRunner_DataParallel`, and `--multigpu`.
+- `save_model_and_optimizer_hdf5` **and** `load_model_and_optimizer_hdf5`
+  (`src/yoke/utils/checkpointing.py`) — no harness writes HDF5 anymore after the
+  `lsc_action` rebuild. Before removing the *loader*, re-check the evaluation
+  scripts that read legacy `.hdf5` artifacts
+  (`applications/evaluation/parameters2image.py`,
+  `tk_parameters2image_slider.py`, `image_prediction_comparison.py`,
+  `lsc_loderunner_anime.py`, `lsc_loderunner_create_gif.py`). Do **not** touch
+  the unrelated `h5py` dataset-cache code in the dataset modules.
+- `LodeRunner_DataParallel` (`src/yoke/utils/parallel.py`) and its test.
+- The `--multigpu` flag + `_DeprecatedMultiGPUAction`
+  (`src/yoke/helpers/cli.py`) and the `@`-input references.
 
-Note on hooks after Phase 2: the `on_before_optimizer_step`/`on_after_step`/
-`on_epoch_start` hooks all exist and are tested, but none of the migrated
-Phase-2 scripts ended up needing `on_epoch_start` (freeze sets are static per
-job; see the finetune_cylex note). EMA uses `on_after_ddp_wrap`/`on_before_save`
-via `make_ema_hooks`. The hook surface is validated and available; keep it for
-future studies rather than pruning it.
+Update the deprecation tests (currently wrapping the calls in `pytest.warns`) to
+delete rather than warn, and keep `pytest -Werror` clean.
 
-**Phase 3** (later): migrate `lsc_action` to `.pth` + DDP (drop HDF5,
-`--multigpu`, and `torch.jit.script`/`torch.compile`); keep `moving_mnist` and
-`mnist_surrogate` bespoke. **Dec-2026 PR** (later): hard-remove the HDF5
-save+load functions, `LodeRunner_DataParallel`, and `--multigpu`.
+Note on hooks: the `on_before_optimizer_step`/`on_after_step`/`on_epoch_start`
+hooks all exist and are tested, but none of the migrated scripts ended up
+needing `on_epoch_start` (freeze sets are static per job; see the finetune_cylex
+note). EMA uses `on_after_ddp_wrap`/`on_before_save` via `make_ema_hooks`. The
+hook surface is validated and available; keep it for future studies rather than
+pruning it.
 
 ---
 
@@ -612,8 +656,10 @@ Lightning already owns the loop; wrapping it in `HarnessTrainer` adds nothing.
    `epoch_kwargs` grad-clip; `ch_lsc_policy` (rebuilt: bespoke freeze
    `model_builder` + per-block `optimizer_builder` + restored cosine scheduler);
    `se_DDP_loderunner_finetune_cylex` (rebuilt: pretrained init + pre-wrap
-   backbone freeze + `warmup_lr` scheduler override); **[TODO] Phase 3**
-   `lsc_action`.
+   backbone freeze + `warmup_lr` scheduler override); **[DONE] Phase 3**
+   `lsc_action` (rebuilt: DDP + `.pth` + cosine LR; dropped HDF5 /
+   DataParallel / `--multigpu` / jit+compile / butterfly wrapper; also fixed the
+   `eval_DDP_array_datastep` arity bug this surfaced).
 6. **[DONE for Phase 1]** Tests under `tests/harnesses/` (`test_trainer.py`) and
    `tests/utils/test_builders.py`. Per-harness smoke tests still optional/TODO.
 7. **[DONE]** Docs: `docs/source/harness_trainer.rst` (in the index toctree) and
