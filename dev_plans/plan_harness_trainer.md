@@ -47,8 +47,32 @@ Dec-2026 hard-removal PR.
     EMA). `trainer.py` and `ema.py` both at **100%** line coverage.
   - **Verification:** `pytest -Werror` → **602 passed** (was 593 after Phase 1;
     +9 new). `ruff check` + `ruff format --check` clean on all changed files.
-- **`ch_lsc_policy` — TODO** (block-progressive (un)freezing via `on_epoch_start`
-  + per-block param-group LRs via a custom `optimizer_builder`).
+- **`ch_lsc_policy` — DONE (rebuilt).** This harness was stale: its script had
+  the LR scheduler commented out, but `train_lsc_policy_epoch` **requires**
+  `LRsched` and calls `LRsched.step()` every batch (no default) — so the script
+  as-shipped would have crashed with a missing-argument `TypeError`. Rather than
+  patch the stale copy, it was **rebuilt** as a thin `HarnessTrainer` wrapper
+  meshing with current Yoke (decision: fix the harness, not `src/yoke`):
+  - **Cosine scheduler restored** (`CosineWithWarmupScheduler`) — the
+    `training_input.tmpl` already supplies all cosine args
+    (`anchor_lr`/`num_cycles`/`min_fraction`/`terminal_steps`/`warmup_steps`),
+    so wiring it up is the correct mesh (user-confirmed) and fixes the crash.
+  - **Bespoke `model_builder`** owns the freeze schedule: fresh run freezes all
+    params then unfreezes the 8 named sub-blocks (everything except the
+    covariance head `cov_mlp`); continuation reloads and freezes `cov_mlp`, and
+    returns the restored optimizer. No `on_epoch_start` unfreeze hook is needed
+    for this study (the freeze set is static per run, not epoch-scheduled), so
+    the freeze logic lives entirely in the model_builder.
+  - **Custom `optimizer_builder`** builds AdamW with 8 per-block parameter
+    groups (base `1e-2` scaled 1x–25x per block, `weight_decay=0.0`) — slots in
+    with no trainer change (validates Q2).
+  - **`blocks`** (label, matcher) list forwarded via `epoch_kwargs` for the
+    epoch function's per-block gradient-norm monitoring.
+  - **Verification:** freeze logic + the 8 param-group LRs + scheduler
+    construction exercised against the real `gaussian_policyCNN` on CPU
+    (`cov_mlp` frozen, mean head trainable, LRs
+    `[0.01, 0.02, 0.1, 0.1, 0.05, 0.25, 0.05, 0.25]`). `ruff` clean; full
+    `pytest -Werror` still 602 passed.
 - **`se_DDP_loderunner_finetune_cylex` — TODO** (bespoke `model_builder` for
   pretrained init + backbone freeze; `on_epoch_start` unfreeze hook; kwarg-
   spelling bug already fixed in Phase 1).
@@ -163,32 +187,23 @@ Dec-2026 hard-removal PR.
 
 ### Where to start next session (Phase 2)
 
-Phase 2 covers the deviating scripts via `TrainerHooks`:
-- **`ch_ldrViT` (both `train_ldrViT_ddp.py` and `train_ldrViT_2frame.py`)** —
-  EMA + gradient clipping. The `train_DDP_loderunner_epoch` signature already
-  accepts `ema_model`, `global_step`, `ema_update_after_step`, and `grad_clip`
-  kwargs, so these thread through `epoch_kwargs` plus `on_after_ddp_wrap`
-  (build the EMA `AveragedModel`), `on_after_step`/`on_before_save` (EMA update
-  + companion save), and the `global_step` return handling already wired in the
-  trainer. Grad-clip is passed to the epoch fn via `grad_clip` in
-  `epoch_kwargs` (the epoch fn does the clipping); confirm whether an
-  `on_before_optimizer_step` hook is actually needed or if `grad_clip` kwarg
-  suffices — likely the latter, so the hook may go unused for these two.
-- **`ch_lsc_policy`** — block-progressive (un)freezing (`on_epoch_start`) and
-  per-block param-group LRs (custom `optimizer_builder`). Uses
-  `train_lsc_policy_epoch`. Inspect its inlined freeze helpers.
+Phase 2 covers the deviating scripts. **`ch_ldrViT` (both scripts) and
+`ch_lsc_policy` are DONE** (see the Phase 2 progress log above). The **one
+remaining** Phase-2 script is:
+
 - **`se_DDP_loderunner_finetune_cylex`** — backbone freeze schedule +
   pretrained-weight init. This needs a **bespoke `model_builder`** (load
   pretrained, optionally strip/replace, freeze backbone for N epochs) plus an
-  `on_epoch_start` unfreeze hook. Note the kwarg-spelling bug here is already
-  fixed. Read its `_set_requires_grad`/`_freeze_*` helpers first.
+  `on_epoch_start` unfreeze hook (this is the first script where the freeze set
+  is genuinely *epoch-scheduled*, so unlike `ch_lsc_policy` it does exercise the
+  `on_epoch_start` hook). Note the kwarg-spelling bug here is already fixed. Read
+  its `_set_requires_grad`/`_freeze_*` helpers first.
 
 Practical starting point: read
-`applications/harnesses/ch_ldrViT/train_ldrViT_ddp.py` and
-`src/yoke/utils/ema.py`, then migrate `ch_ldrViT` first (it exercises the EMA +
-grad-clip hook surface end-to-end and validates the `global_step` plumbing).
-Add hook-ordering tests (grad-clip before step, EMA after step) — the
-`TrainerHooks` order test already exists as a template.
+`applications/harnesses/se_DDP_loderunner_finetune_cylex/` and
+`applications/harnesses/se_DDP_loderunner_cylex/train_LodeRunner_ddp.py` (the
+migrated non-finetune sibling) to reuse the cylex model_args/dataset/scheduler
+pattern, then add the pretrained-load + epoch-scheduled unfreeze on top.
 
 **Phase 3** (later): migrate `lsc_action` to `.pth` + DDP (drop HDF5,
 `--multigpu`, and `torch.jit.script`/`torch.compile`); keep `moving_mnist` and
@@ -555,8 +570,10 @@ Lightning already owns the loop; wrapping it in `HarnessTrainer` adds nothing.
 5. Migrated harness scripts: **[DONE] Phase 1** (`se_DDP_loderunner`,
    `vt_DDP_loderunner`, `se_ldrViT`, `vt_DDP_ldrViT`, `se_DDP_loderunner_cylex`);
    **[IN PROGRESS] Phase 2** — `ch_ldrViT` (both scripts) **DONE** via
-   `make_ema_hooks` + `epoch_kwargs` grad-clip; `ch_lsc_policy` and
-   `se_DDP_loderunner_finetune_cylex` **TODO**; **[TODO] Phase 3** `lsc_action`.
+   `make_ema_hooks` + `epoch_kwargs` grad-clip; `ch_lsc_policy` **DONE**
+   (rebuilt: bespoke freeze `model_builder` + per-block `optimizer_builder` +
+   restored cosine scheduler); `se_DDP_loderunner_finetune_cylex` **TODO**;
+   **[TODO] Phase 3** `lsc_action`.
 6. **[DONE for Phase 1]** Tests under `tests/harnesses/` (`test_trainer.py`) and
    `tests/utils/test_builders.py`. Per-harness smoke tests still optional/TODO.
 7. **[DONE]** Docs: `docs/source/harness_trainer.rst` (in the index toctree) and
