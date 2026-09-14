@@ -116,6 +116,31 @@ A thin harness script
 See ``applications/harnesses/se_DDP_loderunner/train_LodeRunner_ddp.py`` for a
 complete migrated example.
 
+Bespoke model builders: freezing and fine-tuning
+------------------------------------------------
+
+When a study needs parameter freezing, per-block optimizer groups, or
+pretrained-weight initialization, put that logic in a **bespoke**
+``model_builder``/``optimizer_builder`` rather than a hook:
+
+- ``applications/harnesses/ch_lsc_policy/train_lsc_policy.py`` freezes all
+  parameters and unfreezes eight named sub-blocks in its ``model_builder``, then
+  builds AdamW with one parameter group per block (each with its own LR) in a
+  custom ``optimizer_builder``.
+- ``applications/harnesses/se_DDP_loderunner_finetune_cylex/train_LodeRunner_ddp_cylex.py``
+  optionally loads pretrained weights (shape-safe, weights-only) and freezes the
+  transformer backbone for a warmup phase, keeping only the variable-embedding
+  and unpatch head trainable.
+
+**Freeze before the DDP wrap.** Apply ``requires_grad`` changes inside the
+``model_builder`` (which returns the model *before* the trainer wraps it in
+``DistributedDataParallel``). Toggling ``requires_grad`` *after* the wrap
+desynchronizes DDP's gradient reducer from the trainable-parameter set and, with
+the default ``find_unused_parameters=False``, can hang or error. Because a
+harness job trains only ``cycle_epochs`` and resubmits, a job-granular freeze
+decision (based on the job's first/upcoming epoch) covers the epoch-scheduled
+fine-tuning recipes without needing a mid-loop ``on_epoch_start`` toggle.
+
 Demo harnesses
 --------------
 

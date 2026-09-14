@@ -4,10 +4,10 @@
 
 ## 0. Implementation status (living log)
 
-**Completed: Phase 0 + Phase 1.** Remaining: Phase 2, Phase 3, and the later
+**Completed: Phase 0 + Phase 1 + Phase 2.** Remaining: Phase 3 and the later
 Dec-2026 hard-removal PR.
 
-### Phase 2 — IN PROGRESS (deviating scripts via hooks)
+### Phase 2 — DONE (deviating scripts via hooks / bespoke builders)
 
 - **`ch_ldrViT` (both `train_ldrViT_ddp.py` and `train_ldrViT_2frame.py`) —
   DONE.** Both migrated to thin `HarnessTrainer` wrappers (each ~300 → the same
@@ -73,9 +73,42 @@ Dec-2026 hard-removal PR.
     (`cov_mlp` frozen, mean head trainable, LRs
     `[0.01, 0.02, 0.1, 0.1, 0.05, 0.25, 0.05, 0.25]`). `ruff` clean; full
     `pytest -Werror` still 602 passed.
-- **`se_DDP_loderunner_finetune_cylex` — TODO** (bespoke `model_builder` for
-  pretrained init + backbone freeze; `on_epoch_start` unfreeze hook; kwarg-
-  spelling bug already fixed in Phase 1).
+- **`se_DDP_loderunner_finetune_cylex` — DONE (rebuilt).** Fine-tuning sibling
+  of the Phase-1 `se_DDP_loderunner_cylex`; reuses that script's
+  model_args/dataset/scheduler pattern and adds pretrained init + a backbone
+  freeze schedule:
+  - **Bespoke `model_builder`** owns all architecture knowledge: fresh runs
+    construct LodeRunner and, if `--pretrained_model` is given, do a shape-safe
+    weights-only partial load (strip `module.` prefix; keep only name+shape
+    matches; `strict=False`); continuation reloads model + optimizer. It also
+    **applies the backbone freeze for the job before returning** (i.e. before
+    DDP wrapping).
+  - **Freeze applied pre-wrap at job granularity, NOT via `on_epoch_start`.**
+    This was a deliberate correctness decision: toggling `requires_grad` *after*
+    DDP construction desynchronizes DDP's gradient reducer from the trainable
+    set (the reducer is built over the params that `require_grad` at wrap time),
+    risking a hang/error with the default `find_unused_parameters=False`. The
+    original script also froze once per job before the DDP wrap, so applying the
+    freeze in the `model_builder` is **behavior-preserving**. Net result: the
+    `on_epoch_start` hook is available but ultimately **not needed** by any
+    Phase-2 script — the freeze sets here are static per job. (If a future study
+    genuinely needs *mid-job* unfreezing under DDP, that requires
+    `find_unused_parameters=True` or a reducer rebuild — a trainer-level change
+    deferred until a concrete need.)
+  - Backbone-warmup keeps only `parallel_embed`/`var_embed_layer`/`linear4unpatch`
+    trainable (guarded by `hasattr`), freezing everything else while
+    `upcoming_epoch <= freeze_backbone_epochs`.
+  - **`warmup_lr` override** handled in `scheduler_builder`: when the job's first
+    epoch falls in the frozen phase it uses `--warmup_lr` as the (batch-size-
+    scaled) cosine anchor LR instead of `--anchor_lr`. The `scheduler_builder`
+    derives `upcoming_epoch` from `last_epoch`/`train_batches`, and this matches
+    the `model_builder`'s derivation from `starting_epoch` exactly (verified).
+  - **Verification (CPU, real LodeRunner):** fresh no-freeze → all trainable;
+    fresh freeze → only embed/head trainable + backbone frozen; pretrained load
+    reproduces source weights (157 tensors, 0 skipped); LR selection picks
+    `warmup_lr` in the frozen phase (fresh + continuation) and `anchor_lr` once
+    unfrozen, and is a no-op passthrough of `anchor_lr` when no `warmup_lr`/no
+    freeze. `ruff` clean; full `pytest -Werror` still **602 passed**.
 
 ### Phase 0 — DONE (deprecations + helpers + de-dup)
 
@@ -185,25 +218,31 @@ Dec-2026 hard-removal PR.
 8. **Trainer methods stay small/overridable** (`setup_distributed`, `setup`,
    `train`, `finalize`, `teardown`, `run`) as the §4.1 escape hatch.
 
-### Where to start next session (Phase 2)
+### Where to start next session (Phase 3)
 
-Phase 2 covers the deviating scripts. **`ch_ldrViT` (both scripts) and
-`ch_lsc_policy` are DONE** (see the Phase 2 progress log above). The **one
-remaining** Phase-2 script is:
+**Phase 2 is complete** (`ch_ldrViT` x2, `ch_lsc_policy`, and
+`se_DDP_loderunner_finetune_cylex` — see the Phase 2 progress log above). The
+remaining migration work is **Phase 3**:
 
-- **`se_DDP_loderunner_finetune_cylex`** — backbone freeze schedule +
-  pretrained-weight init. This needs a **bespoke `model_builder`** (load
-  pretrained, optionally strip/replace, freeze backbone for N epochs) plus an
-  `on_epoch_start` unfreeze hook (this is the first script where the freeze set
-  is genuinely *epoch-scheduled*, so unlike `ch_lsc_policy` it does exercise the
-  `on_epoch_start` hook). Note the kwarg-spelling bug here is already fixed. Read
-  its `_set_requires_grad`/`_freeze_*` helpers first.
+- **`lsc_action`** — the former outlier. Migrate to the common path: convert
+  HDF5 -> `.pth` checkpointing and vanilla `DataParallel` -> DDP (both already
+  deprecated in Phase 0), drop `--multigpu`, and drop the
+  `torch.jit.script`/`torch.compile` usage (removed outright). With those gone
+  it should fit `HarnessTrainer` directly via `build_from_checkpoint` (or a
+  bespoke `model_builder` if the action-network reload differs). Read
+  `applications/harnesses/lsc_action/train_lsc_action.py` first (HDF5 usage at
+  lines ~26-27, 179, 291-294; `DataParallel` at ~187-201).
+- **`moving_mnist`, `mnist_surrogate`** — stay bespoke (Q3); no change.
 
-Practical starting point: read
-`applications/harnesses/se_DDP_loderunner_finetune_cylex/` and
-`applications/harnesses/se_DDP_loderunner_cylex/train_LodeRunner_ddp.py` (the
-migrated non-finetune sibling) to reuse the cylex model_args/dataset/scheduler
-pattern, then add the pretrained-load + epoch-scheduled unfreeze on top.
+Also still open: the **Dec-2026 hard-removal PR** (deliverable #9) — hard-remove
+the HDF5 save+load functions, `LodeRunner_DataParallel`, and `--multigpu`.
+
+Note on hooks after Phase 2: the `on_before_optimizer_step`/`on_after_step`/
+`on_epoch_start` hooks all exist and are tested, but none of the migrated
+Phase-2 scripts ended up needing `on_epoch_start` (freeze sets are static per
+job; see the finetune_cylex note). EMA uses `on_after_ddp_wrap`/`on_before_save`
+via `make_ema_hooks`. The hook surface is validated and available; keep it for
+future studies rather than pruning it.
 
 **Phase 3** (later): migrate `lsc_action` to `.pth` + DDP (drop HDF5,
 `--multigpu`, and `torch.jit.script`/`torch.compile`); keep `moving_mnist` and
@@ -569,11 +608,12 @@ Lightning already owns the loop; wrapping it in `HarnessTrainer` adds nothing.
 4. **[DONE]** Phase 0 de-duplication of `setup_distributed`/`cleanup_distributed`.
 5. Migrated harness scripts: **[DONE] Phase 1** (`se_DDP_loderunner`,
    `vt_DDP_loderunner`, `se_ldrViT`, `vt_DDP_ldrViT`, `se_DDP_loderunner_cylex`);
-   **[IN PROGRESS] Phase 2** — `ch_ldrViT` (both scripts) **DONE** via
-   `make_ema_hooks` + `epoch_kwargs` grad-clip; `ch_lsc_policy` **DONE**
-   (rebuilt: bespoke freeze `model_builder` + per-block `optimizer_builder` +
-   restored cosine scheduler); `se_DDP_loderunner_finetune_cylex` **TODO**;
-   **[TODO] Phase 3** `lsc_action`.
+   **[DONE] Phase 2** — `ch_ldrViT` (both scripts) via `make_ema_hooks` +
+   `epoch_kwargs` grad-clip; `ch_lsc_policy` (rebuilt: bespoke freeze
+   `model_builder` + per-block `optimizer_builder` + restored cosine scheduler);
+   `se_DDP_loderunner_finetune_cylex` (rebuilt: pretrained init + pre-wrap
+   backbone freeze + `warmup_lr` scheduler override); **[TODO] Phase 3**
+   `lsc_action`.
 6. **[DONE for Phase 1]** Tests under `tests/harnesses/` (`test_trainer.py`) and
    `tests/utils/test_builders.py`. Per-harness smoke tests still optional/TODO.
 7. **[DONE]** Docs: `docs/source/harness_trainer.rst` (in the index toctree) and
