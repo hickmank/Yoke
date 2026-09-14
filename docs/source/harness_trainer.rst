@@ -49,6 +49,53 @@ may return a ``dict`` merged into the checkpoint's ``extra_state``). Because
 hooks compose, a study needing EMA *and* grad-clip *and* scheduled unfreezing
 combines them without any multiple-inheritance mess.
 
+Warmup EMA via ``make_ema_hooks``
+---------------------------------
+
+The Diffusers-style warmup EMA recipe is packaged as a reusable hook factory,
+:func:`yoke.utils.ema.make_ema_hooks`, so harnesses do not re-implement it. It
+returns an ``(on_after_ddp_wrap, on_before_save)`` pair that builds the EMA
+shadow from the DDP-wrapped module, restores the shadow plus the persisted
+``global_step`` from an ``_ema.pth`` companion checkpoint on continuation, and
+writes the ``_ema.pth`` companion and ``_ema_weights.pth`` production checkpoints
+at save time (returning ``{"global_step": ...}`` into the main checkpoint's
+``extra_state``).
+
+The per-step EMA update and gradient clipping themselves live in the shared
+``train_DDP_loderunner_epoch`` function; the harness just passes ``grad_clip``
+and ``ema_update_after_step`` through ``epoch_kwargs``. When an EMA shadow is
+registered (``trainer.ema_model``), the trainer threads it and the live
+``global_step`` into each epoch call and captures the advanced ``global_step``
+returned by the epoch function.
+
+.. code-block:: python
+
+    from yoke.harnesses.trainer import HarnessTrainer, TrainerHooks
+    from yoke.utils.ema import make_ema_hooks
+
+    on_after_ddp_wrap, on_before_save = make_ema_hooks(LodeRunnerViT)
+    hooks = TrainerHooks(
+        on_after_ddp_wrap=on_after_ddp_wrap,
+        on_before_save=on_before_save,
+    )
+    HarnessTrainer(
+        args,
+        model_builder=build_from_checkpoint(LodeRunnerViT, make_model_args),
+        dataset_builder=build_dataset,
+        epoch_fn=train_DDP_loderunner_epoch,
+        scheduler_builder=build_scheduler,
+        epoch_kwargs={
+            "channel_map": list(range(len(CHANNEL_LIST))),
+            "grad_clip": grad_clip,
+            "ema_update_after_step": args.ema_update_after_step,
+        },
+        hooks=hooks,
+    ).run()
+
+See ``applications/harnesses/ch_ldrViT/train_ldrViT_ddp.py`` (and its two-frame
+sibling ``train_ldrViT_2frame.py``) for a complete migrated EMA + grad-clip
+example.
+
 A thin harness script
 ----------------------
 

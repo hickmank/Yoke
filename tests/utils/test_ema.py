@@ -8,6 +8,7 @@ EMA state plus global step counter) cycle.
 
 import os
 import tempfile
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -17,6 +18,7 @@ from yoke.utils.ema import (
     build_ema_model,
     compute_warmup_decay,
     load_ema_into_model,
+    make_ema_hooks,
     make_warmup_ema_fn,
     save_ema_checkpoint,
 )
@@ -208,3 +210,174 @@ def test_ema_continuation_state_survives_restore() -> None:
     assert int(ema2.n_averaged.item()) == int(ema.n_averaged.item())
     for p2, p in zip(ema2.module.parameters(), ema.module.parameters()):
         assert torch.allclose(p2, p)
+
+
+# ============================================================================
+# make_ema_hooks tests (HarnessTrainer integration)
+# ============================================================================
+
+
+class _DDPLike(nn.Module):
+    """Stand-in for DDP that exposes ``.module`` like the real wrapper."""
+
+    def __init__(self, module: nn.Module) -> None:
+        """Wrap ``module`` and expose it as ``.module``."""
+        super().__init__()
+        self.module = module
+
+    def forward(self, *a: object, **k: object) -> object:
+        """Delegate to the wrapped module."""
+        return self.module(*a, **k)
+
+
+def _fake_trainer(**overrides: object) -> SimpleNamespace:
+    """Build a minimal trainer-like namespace for hook testing."""
+    model = TinyNet()
+    base = dict(
+        model=_DDPLike(model),
+        device=torch.device("cpu"),
+        args=SimpleNamespace(continuation=False, checkpoint=None, anchor_lr=1e-4),
+        starting_epoch=0,
+        global_step=0,
+        rank=0,
+        model_args={"dim": 8},
+        optimizer=torch.optim.AdamW(model.parameters(), lr=1e-4),
+        new_chkpt_path=None,
+        ema_model=None,
+    )
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
+def test_make_ema_hooks_fresh_builds_shadow() -> None:
+    """on_after_ddp_wrap builds an EMA shadow and registers it on the trainer."""
+    on_after_ddp_wrap, _ = make_ema_hooks(TinyNet)
+    trainer = _fake_trainer()
+
+    on_after_ddp_wrap(trainer)
+
+    assert trainer.ema_model is not None
+    # Fresh EMA shadow mirrors the underlying module weights before any update.
+    for p_ema, p_model in zip(
+        trainer.ema_model.module.parameters(), trainer.model.module.parameters()
+    ):
+        assert torch.allclose(p_ema, p_model)
+    # Fresh run leaves global_step untouched.
+    assert trainer.global_step == 0
+
+
+def test_make_ema_hooks_save_writes_companion_and_returns_extra_state() -> None:
+    """on_before_save writes companion + production files and returns global_step."""
+    on_after_ddp_wrap, on_before_save = make_ema_hooks(TinyNet)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        main_path = os.path.join(tmp, "study001_modelState_epoch0003.pth")
+        trainer = _fake_trainer(new_chkpt_path=main_path, global_step=1234)
+        on_after_ddp_wrap(trainer)
+
+        extra = on_before_save(trainer, 3)
+
+        assert extra == {"global_step": 1234}
+        assert os.path.exists(main_path.replace(".pth", "_ema.pth"))
+        assert os.path.exists(main_path.replace(".pth", "_ema_weights.pth"))
+
+
+def test_make_ema_hooks_save_no_shadow_returns_none() -> None:
+    """on_before_save is a no-op returning None when no EMA shadow exists."""
+    _, on_before_save = make_ema_hooks(TinyNet)
+    trainer = _fake_trainer(ema_model=None, new_chkpt_path="unused.pth")
+
+    assert on_before_save(trainer, 1) is None
+
+
+def test_make_ema_hooks_continuation_restores_state() -> None:
+    """On continuation the shadow + global_step are restored from the companion."""
+    on_after_ddp_wrap, on_before_save = make_ema_hooks(TinyNet)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        main_path = os.path.join(tmp, "study001_modelState_epoch0002.pth")
+
+        # First, produce a companion checkpoint at epoch 2 with a known step.
+        src = _fake_trainer(new_chkpt_path=main_path, global_step=555)
+        on_after_ddp_wrap(src)
+        # Perturb the shadow so restoration is observable.
+        with torch.no_grad():
+            for p in src.ema_model.module.parameters():
+                p.add_(0.5)
+        on_before_save(src, 2)
+
+        # Now continue: point args.checkpoint at the main path (epoch 2).
+        dst = _fake_trainer(
+            args=SimpleNamespace(
+                continuation=True, checkpoint=main_path, anchor_lr=1e-4
+            ),
+            starting_epoch=2,
+        )
+        on_after_ddp_wrap(dst)
+
+        assert dst.global_step == 555
+        for p_dst, p_src in zip(
+            dst.ema_model.module.parameters(), src.ema_model.module.parameters()
+        ):
+            assert torch.allclose(p_dst, p_src)
+
+
+def test_make_ema_hooks_continuation_epoch_mismatch_raises() -> None:
+    """A companion epoch that disagrees with starting_epoch raises ValueError."""
+    on_after_ddp_wrap, on_before_save = make_ema_hooks(TinyNet)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        main_path = os.path.join(tmp, "study001_modelState_epoch0002.pth")
+        src = _fake_trainer(new_chkpt_path=main_path, global_step=10)
+        on_after_ddp_wrap(src)
+        on_before_save(src, 2)  # companion epoch = 2
+
+        dst = _fake_trainer(
+            args=SimpleNamespace(
+                continuation=True, checkpoint=main_path, anchor_lr=1e-4
+            ),
+            starting_epoch=5,  # disagrees with companion epoch 2
+        )
+        with pytest.raises(ValueError, match="does not match"):
+            on_after_ddp_wrap(dst)
+
+
+def test_make_ema_hooks_continuation_missing_companion_starts_fresh() -> None:
+    """A missing companion checkpoint starts EMA fresh without error."""
+    on_after_ddp_wrap, _ = make_ema_hooks(TinyNet)
+    dst = _fake_trainer(
+        args=SimpleNamespace(
+            continuation=True, checkpoint="/nonexistent/ckpt.pth", anchor_lr=1e-4
+        ),
+        starting_epoch=3,
+    )
+
+    on_after_ddp_wrap(dst)
+
+    assert dst.ema_model is not None
+    assert dst.global_step == 0
+
+
+def test_make_ema_hooks_continuation_zero_step_warns(
+    capsys: pytest.CaptureFixture,
+) -> None:
+    """Resuming at epoch>0 with a persisted global_step of 0 warns (no raise)."""
+    on_after_ddp_wrap, on_before_save = make_ema_hooks(TinyNet)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        main_path = os.path.join(tmp, "study001_modelState_epoch0002.pth")
+        # Companion written at epoch 2 with global_step 0.
+        src = _fake_trainer(new_chkpt_path=main_path, global_step=0)
+        on_after_ddp_wrap(src)
+        on_before_save(src, 2)
+
+        dst = _fake_trainer(
+            args=SimpleNamespace(
+                continuation=True, checkpoint=main_path, anchor_lr=1e-4
+            ),
+            starting_epoch=2,
+        )
+        on_after_ddp_wrap(dst)
+
+    assert dst.global_step == 0
+    assert "global_step is 0 while resuming" in capsys.readouterr().out

@@ -471,3 +471,59 @@ def test_scheduler_builder_is_used(patched_ddp: dict) -> None:
     assert trainer.scheduler is sentinel_scheduler
     assert captured["last_epoch"] == -1  # fresh run
     assert calls[0]["LRsched"] is sentinel_scheduler
+
+
+def test_ema_model_and_global_step_threaded_into_epoch(patched_ddp: dict) -> None:
+    """When an EMA shadow is set, it and the live global_step reach epoch_fn."""
+    args = _make_args(total_epochs=10, cycle_epochs=2)
+    sentinel_ema = object()
+    calls: list[dict] = []
+
+    def on_after_ddp_wrap(t: HarnessTrainer) -> None:
+        # Emulate make_ema_hooks: register a shadow + restore a global_step.
+        t.ema_model = sentinel_ema
+        t.global_step = 100
+
+    def epoch_fn(**kwargs: object) -> int:
+        calls.append(kwargs)
+        # Emulate the epoch advancing the global-step counter.
+        return kwargs["global_step"] + 5
+
+    trainer = HarnessTrainer(
+        args,
+        model_builder=_fresh_model_builder,
+        dataset_builder=_dataset_builder,
+        epoch_fn=epoch_fn,
+        hooks=TrainerHooks(on_after_ddp_wrap=on_after_ddp_wrap),
+        epoch_kwargs={"channel_map": [0, 1, 2]},
+    )
+    trainer.setup_distributed()
+    trainer.setup()
+    trainer.train()
+
+    # Two epochs; ema_model threaded both times.
+    assert calls[0]["ema_model"] is sentinel_ema
+    assert calls[1]["ema_model"] is sentinel_ema
+    # global_step fed in as the live value and advanced across epochs.
+    assert calls[0]["global_step"] == 100
+    assert calls[1]["global_step"] == 105
+    assert trainer.global_step == 110
+
+
+def test_no_ema_means_no_ema_kwargs(patched_ddp: dict) -> None:
+    """Without an EMA shadow, ema_model/global_step are not injected."""
+    args = _make_args(total_epochs=10, cycle_epochs=1)
+    calls: list[dict] = []
+
+    trainer = HarnessTrainer(
+        args,
+        model_builder=_fresh_model_builder,
+        dataset_builder=_dataset_builder,
+        epoch_fn=lambda **k: calls.append(k),
+    )
+    trainer.setup_distributed()
+    trainer.setup()
+    trainer.train()
+
+    assert "ema_model" not in calls[0]
+    assert "global_step" not in calls[0]

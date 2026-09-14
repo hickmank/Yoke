@@ -7,6 +7,52 @@
 **Completed: Phase 0 + Phase 1.** Remaining: Phase 2, Phase 3, and the later
 Dec-2026 hard-removal PR.
 
+### Phase 2 — IN PROGRESS (deviating scripts via hooks)
+
+- **`ch_ldrViT` (both `train_ldrViT_ddp.py` and `train_ldrViT_2frame.py`) —
+  DONE.** Both migrated to thin `HarnessTrainer` wrappers (each ~300 → the same
+  builder pattern as the Phase-1 ViT scripts). EMA + gradient clipping are wired
+  as follows:
+  - **Grad-clip + EMA-update cadence flow through `epoch_kwargs`.** The shared
+    `train_DDP_loderunner_epoch` already performs per-step gradient clipping
+    (`grad_clip`) and the per-step EMA update (`ema_model`, `global_step`,
+    `ema_update_after_step`), so **no `on_before_optimizer_step`/`on_after_step`
+    hook is needed** — confirming the Phase-1 hypothesis. `grad_clip` and
+    `ema_update_after_step` are passed via `epoch_kwargs`.
+  - **EMA build/restore/save is factored into `yoke.utils.ema.make_ema_hooks`**
+    (NEW), which returns `(on_after_ddp_wrap, on_before_save)` callables. This
+    removed ~120 lines of copy-pasted EMA boilerplate that was **duplicated
+    verbatim** across the two scripts. `on_after_ddp_wrap` builds the shadow
+    from `model.module`, and on continuation restores the shadow + persisted
+    `global_step` from the `_ema.pth` companion (with the same epoch-consistency
+    check and zero-step warning as before). `on_before_save` writes the `_ema.pth`
+    companion (class-aware) + `_ema_weights.pth` production checkpoint and
+    returns `{"global_step": ...}` merged into the main checkpoint's
+    `extra_state`.
+  - **Trainer EMA threading (NEW in `trainer.py`):** added a `self.ema_model`
+    attribute (default `None`, set by the EMA hook). `_epoch_call_kwargs` now
+    injects `ema_model=self.ema_model` and `global_step=self.global_step` into
+    the epoch call **only when `self.ema_model is not None`**, so non-EMA
+    harnesses are unaffected. The `global_step` int returned by the epoch fn is
+    captured back into `self.global_step` (already wired in Phase 1), keeping the
+    warmup schedule continuous across epochs.
+  - **Behavior preserved:** `ddp` uses `mlp_ratio=1.0`, `use_ema` opt-in;
+    `2frame` uses the RoPE model_args (`num_input_frames=2`, `rope_scale`,
+    `eps=1e-7`, `bias`), `dataset="pli_2frame"`, and `use_ema` default `True`.
+  - **Tests:** `make_ema_hooks` covered end-to-end in `tests/utils/test_ema.py`
+    (fresh build, companion save + extra_state, no-shadow no-op, continuation
+    restore, epoch-mismatch raise, missing-companion fresh start, zero-step
+    warning); trainer EMA threading covered in `tests/harnesses/test_trainer.py`
+    (`ema_model`/`global_step` threaded + advanced across epochs; absent when no
+    EMA). `trainer.py` and `ema.py` both at **100%** line coverage.
+  - **Verification:** `pytest -Werror` → **602 passed** (was 593 after Phase 1;
+    +9 new). `ruff check` + `ruff format --check` clean on all changed files.
+- **`ch_lsc_policy` — TODO** (block-progressive (un)freezing via `on_epoch_start`
+  + per-block param-group LRs via a custom `optimizer_builder`).
+- **`se_DDP_loderunner_finetune_cylex` — TODO** (bespoke `model_builder` for
+  pretrained init + backbone freeze; `on_epoch_start` unfreeze hook; kwarg-
+  spelling bug already fixed in Phase 1).
+
 ### Phase 0 — DONE (deprecations + helpers + de-dup)
 
 - **HDF5 checkpoint deprecation** (`src/yoke/utils/checkpointing.py`):
@@ -508,7 +554,9 @@ Lightning already owns the loop; wrapping it in `HarnessTrainer` adds nothing.
 4. **[DONE]** Phase 0 de-duplication of `setup_distributed`/`cleanup_distributed`.
 5. Migrated harness scripts: **[DONE] Phase 1** (`se_DDP_loderunner`,
    `vt_DDP_loderunner`, `se_ldrViT`, `vt_DDP_ldrViT`, `se_DDP_loderunner_cylex`);
-   **[TODO] Phase 2** hook-based ones; **[TODO] Phase 3** `lsc_action`.
+   **[IN PROGRESS] Phase 2** — `ch_ldrViT` (both scripts) **DONE** via
+   `make_ema_hooks` + `epoch_kwargs` grad-clip; `ch_lsc_policy` and
+   `se_DDP_loderunner_finetune_cylex` **TODO**; **[TODO] Phase 3** `lsc_action`.
 6. **[DONE for Phase 1]** Tests under `tests/harnesses/` (`test_trainer.py`) and
    `tests/utils/test_builders.py`. Per-harness smoke tests still optional/TODO.
 7. **[DONE]** Docs: `docs/source/harness_trainer.rst` (in the index toctree) and

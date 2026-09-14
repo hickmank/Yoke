@@ -204,6 +204,16 @@ migrated example and `docs/source/harness_trainer.rst` for the full write-up.
 `moving_mnist` and `mnist_surrogate` are intentionally kept as bespoke,
 single-process demo scripts and do **not** use `HarnessTrainer`.
 
+Warmup EMA is packaged as a reusable hook factory,
+`yoke.utils.ema.make_ema_hooks`, which returns an
+`(on_after_ddp_wrap, on_before_save)` pair (build/restore the EMA shadow +
+`global_step`; write the `_ema.pth` companion and `_ema_weights.pth` production
+checkpoints). The per-step EMA update and gradient clipping live in
+`train_DDP_loderunner_epoch`; the harness passes `grad_clip` and
+`ema_update_after_step` via `epoch_kwargs`. When `trainer.ema_model` is set, the
+trainer threads it and the live `global_step` into each epoch call. See
+`applications/harnesses/ch_ldrViT/train_ldrViT_ddp.py` (and `train_ldrViT_2frame.py`).
+
 Shared builder helpers live in `yoke.utils.builders` (`build_adamw`,
 `move_optimizer_state_to_device`, `compute_last_epoch`, `default_mse_loss`,
 `checkpoint_name`, `build_from_checkpoint`).

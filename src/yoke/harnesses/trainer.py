@@ -213,6 +213,12 @@ class HarnessTrainer:
         self.train_dataloader: object | None = None
         self.val_dataloader: object | None = None
 
+        # Optional EMA shadow model, populated by an ``on_after_ddp_wrap`` hook
+        # (e.g. from :func:`yoke.utils.ema.make_ema_hooks`). When present, the
+        # trainer threads it -- together with the live ``global_step`` -- into
+        # each ``epoch_fn`` call so EMA-aware epoch functions can update it.
+        self.ema_model: nn.Module | None = None
+
         self.starting_epoch: int = 0
         self.last_epoch: int = -1
         self.ending_epoch: int = 0
@@ -329,6 +335,15 @@ class HarnessTrainer:
         }
         # Study-specific extra kwargs (e.g. channel_map, dataset tag, EMA).
         kwargs.update(self.epoch_kwargs)
+
+        # When an EMA shadow has been built (by an ``on_after_ddp_wrap`` hook),
+        # thread it and the live global-step counter into the epoch call. The
+        # epoch function updates the EMA and returns the advanced ``global_step``
+        # (captured back into ``self.global_step`` in :meth:`train`), keeping the
+        # warmup schedule continuous across epochs and continuation restarts.
+        if self.ema_model is not None:
+            kwargs["ema_model"] = self.ema_model
+            kwargs["global_step"] = self.global_step
         return kwargs
 
     def train(self) -> None:
