@@ -139,18 +139,20 @@ def test_hdf5_scalar_param_and_buffer_roundtrip() -> None:
 
     with tempfile.TemporaryDirectory() as tmpdir:
         ckpt_path = os.path.join(tmpdir, "scalar_ckpt.h5")
-        save_model_and_optimizer_hdf5(
-            model=model, optimizer=optimizer, epoch=3, filepath=ckpt_path
-        )
+        with pytest.warns(DeprecationWarning):
+            save_model_and_optimizer_hdf5(
+                model=model, optimizer=optimizer, epoch=3, filepath=ckpt_path
+            )
 
         # Fresh model with default scalar values.
         fresh_model = ScalarNet()
         fresh_optimizer = optim.SGD(fresh_model.parameters(), lr=0.1)
         assert not torch.isclose(fresh_model.scale.detach(), torch.tensor(3.5))
 
-        epoch = load_model_and_optimizer_hdf5(
-            model=fresh_model, optimizer=fresh_optimizer, filepath=ckpt_path
-        )
+        with pytest.warns(DeprecationWarning):
+            epoch = load_model_and_optimizer_hdf5(
+                model=fresh_model, optimizer=fresh_optimizer, filepath=ckpt_path
+            )
 
     assert epoch == 3
     assert torch.allclose(fresh_model.scale.detach(), torch.tensor(3.5)), (
@@ -185,16 +187,18 @@ def test_hdf5_optimizer_momentum_roundtrip() -> None:
 
     with tempfile.TemporaryDirectory() as tmpdir:
         ckpt_path = os.path.join(tmpdir, "momentum_ckpt.h5")
-        save_model_and_optimizer_hdf5(
-            model=model, optimizer=optimizer, epoch=7, filepath=ckpt_path
-        )
+        with pytest.warns(DeprecationWarning):
+            save_model_and_optimizer_hdf5(
+                model=model, optimizer=optimizer, epoch=7, filepath=ckpt_path
+            )
 
         fresh_model = DummyNet()
         # Copy weights so parameter identity/order matches for state restoration.
         fresh_optimizer = optim.SGD(fresh_model.parameters(), lr=0.1, momentum=0.9)
-        epoch = load_model_and_optimizer_hdf5(
-            model=fresh_model, optimizer=fresh_optimizer, filepath=ckpt_path
-        )
+        with pytest.warns(DeprecationWarning):
+            epoch = load_model_and_optimizer_hdf5(
+                model=fresh_model, optimizer=fresh_optimizer, filepath=ckpt_path
+            )
 
     assert epoch == 7
     loaded_state = fresh_optimizer.state_dict()

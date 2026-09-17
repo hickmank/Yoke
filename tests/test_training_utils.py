@@ -122,7 +122,8 @@ def test_save_model_and_optimizer_hdf5(
         filepath = os.path.join(tmpdir, "checkpoint.h5")
 
         # Save the model and optimizer state
-        save_model_and_optimizer_hdf5(model, optimizer, epoch, filepath)
+        with pytest.warns(DeprecationWarning):
+            save_model_and_optimizer_hdf5(model, optimizer, epoch, filepath)
 
         # Validate the saved file
         with h5py.File(filepath, "r") as h5f:
@@ -188,9 +189,10 @@ def test_save_model_and_optimizer_hdf5_compiled_model(
         filepath = os.path.join(tmpdir, "compiled_checkpoint.h5")
 
         # Save the compiled model and optimizer state
-        save_model_and_optimizer_hdf5(
-            compiled_model, optimizer, epoch, filepath, compiled=True
-        )
+        with pytest.warns(DeprecationWarning):
+            save_model_and_optimizer_hdf5(
+                compiled_model, optimizer, epoch, filepath, compiled=True
+            )
 
         # Validate the saved file
         with h5py.File(filepath, "r") as h5f:
@@ -217,16 +219,18 @@ def test_load_model_and_optimizer_hdf5(
         filepath = os.path.join(tmpdir, "checkpoint.h5")
 
         # Save the model and optimizer state
-        save_model_and_optimizer_hdf5(model, optimizer, epoch, filepath)
+        with pytest.warns(DeprecationWarning):
+            save_model_and_optimizer_hdf5(model, optimizer, epoch, filepath)
 
         # Create new model and optimizer instances for loading
         loaded_model = SimpleModel2()
         loaded_optimizer = optim.SGD(loaded_model.parameters(), lr=0.01, momentum=0.9)
 
         # Load the state into the new instances
-        loaded_epoch = load_model_and_optimizer_hdf5(
-            loaded_model, loaded_optimizer, filepath
-        )
+        with pytest.warns(DeprecationWarning):
+            loaded_epoch = load_model_and_optimizer_hdf5(
+                loaded_model, loaded_optimizer, filepath
+            )
 
         # Verify the epoch is correctly restored
         assert loaded_epoch == epoch
@@ -650,7 +654,8 @@ def test_hdf5_roundtrip_scalar_params_and_buffers() -> None:
     epoch = 3
     with TemporaryDirectory() as tmpdir:
         filepath = os.path.join(tmpdir, "scalar_checkpoint.h5")
-        save_model_and_optimizer_hdf5(model, optimizer, epoch, filepath)
+        with pytest.warns(DeprecationWarning):
+            save_model_and_optimizer_hdf5(model, optimizer, epoch, filepath)
 
         # Scalar param/buffer are stored as HDF5 attributes (save-side branch).
         with h5py.File(filepath, "r") as h5f:
@@ -659,9 +664,10 @@ def test_hdf5_roundtrip_scalar_params_and_buffers() -> None:
 
         loaded_model = ScalarBufferModel()
         loaded_optimizer = optim.SGD(loaded_model.parameters(), lr=0.01, momentum=0.9)
-        loaded_epoch = load_model_and_optimizer_hdf5(
-            loaded_model, loaded_optimizer, filepath
-        )
+        with pytest.warns(DeprecationWarning):
+            loaded_epoch = load_model_and_optimizer_hdf5(
+                loaded_model, loaded_optimizer, filepath
+            )
 
         assert loaded_epoch == epoch
         # Scalar (0-dim) param and buffer restored from HDF5 attributes.
@@ -684,7 +690,8 @@ def test_hdf5_save_unwraps_dataparallel() -> None:
     with TemporaryDirectory() as tmpdir:
         filepath = os.path.join(tmpdir, "dp_checkpoint.h5")
         # Should not raise despite the DataParallel wrapper.
-        save_model_and_optimizer_hdf5(wrapped, optimizer, epoch, filepath)
+        with pytest.warns(DeprecationWarning):
+            save_model_and_optimizer_hdf5(wrapped, optimizer, epoch, filepath)
 
         with h5py.File(filepath, "r") as h5f:
             assert h5f.attrs["epoch"] == epoch

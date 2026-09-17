@@ -4,7 +4,10 @@ Some models within Yoke require specific modifications to PyTorch multi-GPU
 training utilities.
 
 """
+
 import os
+import warnings
+
 import torch
 import torch.nn as nn
 import torch.distributed as dist
@@ -48,11 +51,14 @@ def setup_distributed() -> tuple[int, int, int, torch.device]:
     device = torch.device(f"cuda:{local_rank}")
 
     # ----- 3) Initialize the process group -----
+    # Pass ``device_id`` so the process group is eagerly bound to this rank's
+    # device, matching the modern PyTorch DDP recommendation.
     dist.init_process_group(
         backend="nccl",
         init_method=f"tcp://{master_addr}:{master_port}",
         world_size=world_size,
         rank=rank,
+        device_id=device,
     )
 
     return rank, world_size, local_rank, device
@@ -66,6 +72,7 @@ def cleanup_distributed() -> None:
     """
     dist.destroy_process_group()
 
+
 # Custom nn.DataParallel class to handle input to LodeRunner that should not be
 # split by batch.
 class LodeRunner_DataParallel(nn.DataParallel):
@@ -76,10 +83,24 @@ class LodeRunner_DataParallel(nn.DataParallel):
     of which do not, we must handle the splitting of data across multiple GPUs
     explicitly.
 
+    .. deprecated::
+        Vanilla :class:`torch.nn.DataParallel`-based training is deprecated and
+        this class is targeted for **hard removal in December 2026**. DDP is the
+        single supported parallelism model for Yoke harnesses; use
+        :func:`setup_distributed` with
+        :class:`torch.nn.parallel.DistributedDataParallel` instead.
+
     """
 
     def __init__(self, model: nn.Module) -> None:
         """Get it initialized using parent."""
+        warnings.warn(
+            "LodeRunner_DataParallel is deprecated and will be removed in "
+            "December 2026. Use DistributedDataParallel (via "
+            "yoke.utils.parallel.setup_distributed) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         super().__init__(model)
 
     def forward(self, *inputs: torch.Tensor, **kwargs: object) -> torch.Tensor:

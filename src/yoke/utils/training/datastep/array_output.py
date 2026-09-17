@@ -172,7 +172,6 @@ def eval_array_datastep(
 def eval_DDP_array_datastep(
     data: tuple,
     model: nn.Module,
-    optimizer: torch.optim.Optimizer,
     loss_fn: nn.Module,
     device: torch.device,
     rank: int,
@@ -183,7 +182,6 @@ def eval_DDP_array_datastep(
     Args:
         data (tuple): tuple of model input and corresponding ground truth
         model (loaded pytorch model): model to train
-        optimizer (torch.optim): optimizer for training set
         loss_fn (torch.nn Loss Function): loss function for training set
         device (torch.device): device index to select
         rank (int): Rank of device

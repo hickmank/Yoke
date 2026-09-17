@@ -42,6 +42,7 @@ Typical usage::
 
 """
 
+import os
 from collections.abc import Callable
 
 import torch
@@ -215,6 +216,167 @@ def load_ema_into_model(model: torch.nn.Module, path: str) -> torch.nn.Module:
     state_dict = torch.load(path, map_location="cpu", weights_only=True)
     model.load_state_dict(state_dict)
     return model
+
+
+def make_ema_hooks(
+    model_class: type,
+    max_decay: float = 0.9999,
+    inv_gamma: float = 1.0,
+    power: float = 2.0 / 3.0,
+) -> tuple[
+    Callable[[object], None],
+    Callable[[object, int], dict | None],
+]:
+    """Build ``HarnessTrainer`` hooks that maintain a warmup-EMA shadow.
+
+    This factory encapsulates the EMA boilerplate that was previously copied
+    into the ``ch_ldrViT`` training scripts: building the EMA shadow from the
+    DDP-wrapped module, restoring it (plus the persisted ``global_step``) from a
+    companion checkpoint on continuation, and writing the EMA companion and
+    production checkpoints at save time. The two returned callables plug
+    directly into :class:`yoke.harnesses.trainer.TrainerHooks` as
+    ``on_after_ddp_wrap`` and ``on_before_save``.
+
+    The EMA companion checkpoint is written next to the main checkpoint with an
+    ``_ema.pth`` suffix (via :func:`save_model_and_optimizer`, so it reconstructs
+    class-aware), and a production ``_ema_weights.pth`` plain ``state_dict`` is
+    written on rank 0 (via :func:`save_ema_checkpoint`). The main checkpoint
+    receives ``{"global_step": ...}`` as ``extra_state`` so the warmup schedule
+    stays continuous across restarts.
+
+    The trainer threads the built ``ema_model`` and the live ``global_step`` into
+    each ``epoch_fn`` call (see
+    :meth:`yoke.harnesses.trainer.HarnessTrainer._epoch_call_kwargs`), so the
+    epoch function performs the actual per-step EMA update and returns the
+    advanced ``global_step``.
+
+    Args:
+        model_class (type): The model class of the shadowed module (e.g.
+            :class:`~yoke.models.vit.swin.bomberman.LodeRunnerViT`). Used to save
+            the EMA companion checkpoint class-aware.
+        max_decay (float): Maximum (asymptotic) EMA decay.
+        inv_gamma (float): Inverse-gamma factor controlling the warmup rate.
+        power (float): Warmup power for the EMA decay schedule.
+
+    Returns:
+        tuple: ``(on_after_ddp_wrap, on_before_save)`` callables for
+        :class:`TrainerHooks`.
+    """
+    # Imported lazily to avoid a hard import cycle at module import time
+    # (checkpointing imports are cheap but kept local for symmetry).
+    from yoke.utils.checkpointing import (
+        load_model_and_optimizer,
+        save_model_and_optimizer,
+    )
+
+    def on_after_ddp_wrap(trainer: object) -> None:
+        """Build the EMA shadow and restore it from a companion checkpoint.
+
+        Args:
+            trainer (object): The live :class:`HarnessTrainer` instance.
+        """
+        # Build the EMA shadow from the underlying (unwrapped) module.
+        ema_model = build_ema_model(
+            trainer.model.module,
+            max_decay=max_decay,
+            inv_gamma=inv_gamma,
+            power=power,
+            device=trainer.device,
+        )
+
+        # Restore EMA weights + global step on continuation, if present.
+        args = trainer.args
+        checkpoint = getattr(args, "checkpoint", None)
+        if getattr(args, "continuation", False) and checkpoint:
+            ema_state_path = checkpoint.replace(".pth", "_ema.pth")
+            if os.path.exists(ema_state_path):
+                ema_loaded_model, _, ema_epoch, ema_ckpt = load_model_and_optimizer(
+                    ema_state_path,
+                    optimizer_class=torch.optim.AdamW,
+                    optimizer_kwargs={
+                        "lr": getattr(args, "anchor_lr", 1e-4),
+                        "betas": (0.9, 0.999),
+                        "eps": 1e-08,
+                        "weight_decay": 0.01,
+                    },
+                    available_models={model_class.__name__: model_class},
+                    device=trainer.device,
+                    return_checkpoint=True,
+                )
+                # Copy reconstructed EMA weights into the shadow's inner module.
+                ema_model.module.load_state_dict(ema_loaded_model.state_dict())
+                trainer.global_step = int(ema_ckpt.get("global_step", 0))
+
+                # The EMA companion must come from the same restart point as the
+                # main checkpoint (``starting_epoch`` set by the model_builder).
+                if ema_epoch != trainer.starting_epoch:
+                    raise ValueError(
+                        f"EMA checkpoint epoch ({ema_epoch}) does not match the "
+                        f"main checkpoint epoch ({trainer.starting_epoch}). The "
+                        f"main and EMA checkpoints appear to be out of sync; "
+                        f"refusing to continue with a corrupt EMA warmup schedule."
+                    )
+
+                if trainer.global_step == 0 and trainer.starting_epoch > 0:
+                    print(
+                        "WARNING: EMA global_step is 0 while resuming at epoch "
+                        f"{trainer.starting_epoch}; the EMA warmup schedule will "
+                        "restart from scratch."
+                    )
+
+                print(
+                    f"EMA state restored from {ema_state_path} "
+                    f"(epoch={ema_epoch}, global_step={trainer.global_step})."
+                )
+            else:
+                print(
+                    f"No EMA companion checkpoint at {ema_state_path}; "
+                    "starting EMA fresh."
+                )
+
+        # Register the shadow so the trainer threads it into each epoch call.
+        trainer.ema_model = ema_model
+
+    def on_before_save(trainer: object, epochIDX: int) -> dict | None:
+        """Save the EMA companion + production checkpoints; return extra_state.
+
+        Args:
+            trainer (object): The live :class:`HarnessTrainer` instance.
+            epochIDX (int): The epoch index being checkpointed.
+
+        Returns:
+            dict | None: ``{"global_step": ...}`` merged into the main
+            checkpoint, or ``None`` if no EMA shadow exists.
+        """
+        ema_model = getattr(trainer, "ema_model", None)
+        if ema_model is None:
+            return None
+
+        main_path = trainer.new_chkpt_path
+        ema_state_path = main_path.replace(".pth", "_ema.pth")
+
+        # Persist the EMA shadow class-aware. The optimizer is reused purely to
+        # satisfy the signature; it is ignored on EMA restore.
+        save_model_and_optimizer(
+            ema_model.module,
+            trainer.optimizer,
+            epochIDX,
+            ema_state_path,
+            model_class=model_class,
+            model_args=trainer.model_args,
+            extra_state={"global_step": trainer.global_step},
+        )
+
+        # Production EMA weights (loads cleanly into a fresh model).
+        if trainer.rank == 0:
+            ema_prod_path = main_path.replace(".pth", "_ema_weights.pth")
+            save_ema_checkpoint(ema_model, ema_prod_path)
+            print(f"[Rank {trainer.rank}] Saved EMA checkpoints -> {ema_state_path}")
+
+        # The main checkpoint records global_step so warmup stays continuous.
+        return {"global_step": trainer.global_step}
+
+    return on_after_ddp_wrap, on_before_save
 
 
 if __name__ == "__main__":

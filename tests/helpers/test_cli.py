@@ -2,6 +2,8 @@
 
 import argparse
 
+import pytest
+
 from yoke.helpers import cli
 
 
@@ -64,6 +66,20 @@ def test_add_filepath_args() -> None:
 def test_add_computing_args() -> None:
     """Ensure computing argparser runs without crashing."""
     cli.add_computing_args(argparse.ArgumentParser())
+
+
+def test_multigpu_flag_deprecated_and_ignored() -> None:
+    """--multigpu is deprecated: it warns and resolves to False (no-op)."""
+    parser = cli.add_computing_args(argparse.ArgumentParser())
+
+    # Default (flag absent) is False without a warning.
+    args = parser.parse_args([])
+    assert args.multigpu is False
+
+    # Providing the flag warns and remains ignored (False).
+    with pytest.warns(DeprecationWarning):
+        args = parser.parse_args(["--multigpu"])
+    assert args.multigpu is False
 
 
 def test_add_model_args() -> None:
