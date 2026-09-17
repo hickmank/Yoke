@@ -57,7 +57,7 @@ export date00=`date`
 
 # Start the Code
 # Explicitly set TCP environment for the following...
-srun python -u <train_script> @<INPUTFILE>
+srun python -u train_DDP_diffLDR.py @<INPUTFILE>
 
 # Get end time and print to stdout
 export date01=`date`

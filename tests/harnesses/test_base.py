@@ -226,6 +226,7 @@ def test_load_hyperparameters_parses_rows_index_and_comments(
     assert isinstance(studies[0]["studyIDX"], int)
     assert studies[0]["init_learnrate"] == pytest.approx(0.001)
     assert studies[0]["batch_size"] == 8
+    assert isinstance(studies[0]["batch_size"], int)
     assert studies[1]["studyIDX"] == 2
     assert studies[1]["init_learnrate"] == pytest.approx(0.002)
     assert studies[1]["batch_size"] == 16

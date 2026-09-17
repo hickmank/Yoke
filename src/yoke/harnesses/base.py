@@ -116,7 +116,10 @@ class HarnessStudy:
 
         study_list = []
         for idx in df.index.values:
-            study = df.loc[idx].to_dict()
+            # Selecting a row as a Series coerces all numeric columns to a common
+            # dtype. Keep the one-row DataFrame so integer template fields remain
+            # integers when a study also contains floating-point hyperparameters.
+            study = df.loc[[idx]].to_dict(orient="records")[0]
             study["studyIDX"] = int(idx)
             study_list.append(study)
 
