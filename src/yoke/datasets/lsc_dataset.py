@@ -687,6 +687,7 @@ class LSC_rho2rho_temporal_DataSet(Dataset):
         max_timeIDX_offset: int,
         max_file_checks: int,
         half_image: bool = True,
+        deterministic: bool = False,
         hydro_fields: np.array = np.array(
             [
                 "density_case",
@@ -723,7 +724,10 @@ class LSC_rho2rho_temporal_DataSet(Dataset):
                                    argument controls the maximum number of times indices
                                    are generated before throwing an error.
             half_image (bool): If True then returned images are NOT reflected about axis
-                               of symmetry and half-images are returned instead.
+                                of symmetry and half-images are returned instead.
+            deterministic (bool): Select time pairs from the sample index rather
+                than randomly. Intended for repeatable evaluation. Defaults to
+                ``False``.
             hydro_fields (np.array, optional): Array of hydro field names to be included.
                                                Defaults to:
                                                [
@@ -743,13 +747,15 @@ class LSC_rho2rho_temporal_DataSet(Dataset):
         self.max_timeIDX_offset = max_timeIDX_offset
         self.max_file_checks = max_file_checks
         self.half_image = half_image
+        self.deterministic = deterministic
 
         # Create filelist
         with open(file_prefix_list) as f:
             self.file_prefix_list = [line.rstrip() for line in f]
 
-        # Shuffle the list of prefixes in-place
-        random.shuffle(self.file_prefix_list)
+        # Training benefits from shuffled prefixes; evaluation needs stable order.
+        if not self.deterministic:
+            random.shuffle(self.file_prefix_list)
 
         self.Nsamples = len(self.file_prefix_list)
 
@@ -782,8 +788,15 @@ class LSC_rho2rho_temporal_DataSet(Dataset):
                 #
                 # Choose random starting index 0-(100-max_timeIDX_offset) so
                 # the end index will be less than or equal to 99.
-                seqLen = self.rng.integers(0, self.max_timeIDX_offset, endpoint=True)
-                startIDX = self.rng.integers(0, 100 - seqLen, endpoint=True)
+                if self.deterministic:
+                    pair_index = index + attempt
+                    seqLen = pair_index % (self.max_timeIDX_offset + 1)
+                    startIDX = (pair_index // (self.max_timeIDX_offset + 1)) % (
+                        101 - seqLen
+                    )
+                else:
+                    seqLen = self.rng.integers(0, self.max_timeIDX_offset, endpoint=True)
+                    startIDX = self.rng.integers(0, 100 - seqLen, endpoint=True)
                 endIDX = startIDX + seqLen
 
                 # Construct file names

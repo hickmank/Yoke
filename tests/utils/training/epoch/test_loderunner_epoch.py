@@ -339,6 +339,37 @@ def test_eval_loderunner_epoch_writes_csv_and_stops_after_limit(
     assert len(p.read_text().splitlines()) == 1
 
 
+def test_eval_loderunner_epoch_uses_inference_mode(
+    tmp_path: Path,
+    simple_loaders: tuple[DataLoader, DataLoader],
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Evaluation datasteps run with inference mode enabled."""
+    test_loader, _ = simple_loaders
+    modes: list[bool] = []
+
+    def inference_step(
+        *args: object, **kwargs: object
+    ) -> tuple[None, None, torch.Tensor]:
+        """Record the inference context used by the evaluation loop."""
+        modes.append(torch.is_inference_mode_enabled())
+        return None, None, torch.tensor([0.5])
+
+    monkeypatch.setattr(epoch_mod, "eval_loderunner_datastep", inference_step)
+    epoch_mod.eval_loderunner_epoch(
+        testing_data=test_loader,
+        num_test_batches=1,
+        model=nn.Linear(1, 1),
+        channel_map=[0],
+        loss_fn=nn.MSELoss(reduction="none"),
+        epochIDX=1,
+        test_rcrd_filename=str(tmp_path / "test.csv"),
+        device=torch.device("cpu"),
+    )
+
+    assert modes == [True]
+
+
 class _CountingEMA:
     """Minimal stand-in for an AveragedModel tracking update_parameters calls."""
 

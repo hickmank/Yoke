@@ -92,7 +92,7 @@ def patched_ddp(monkeypatch: pytest.MonkeyPatch) -> dict:
 
     Returns a dict of recorders so tests can assert on saves/resubmissions.
     """
-    recorder: dict = {"saves": [], "submits": [], "continuations": []}
+    recorder: dict = {"saves": [], "submits": [], "continuations": [], "evaluations": []}
 
     monkeypatch.setattr(
         trainer_mod,
@@ -150,6 +150,26 @@ def patched_ddp(monkeypatch: pytest.MonkeyPatch) -> dict:
 
     monkeypatch.setattr(
         trainer_mod.HarnessStudy, "continuation_setup", staticmethod(_fake_continuation)
+    )
+
+    def _fake_evaluation(
+        checkpointpath: str,
+        studyIDX: int,
+        epochIDX: int,
+        submission_type: str = "slurm",
+    ) -> str:
+        recorder["evaluations"].append(
+            SimpleNamespace(
+                checkpointpath=checkpointpath,
+                studyIDX=studyIDX,
+                epochIDX=epochIDX,
+                submission_type=submission_type,
+            )
+        )
+        return "study003_evaluation.slurm"
+
+    monkeypatch.setattr(
+        trainer_mod.HarnessStudy, "evaluation_setup", staticmethod(_fake_evaluation)
     )
     monkeypatch.setattr(
         trainer_mod.os, "system", lambda cmd: recorder["submits"].append(cmd)
@@ -337,6 +357,46 @@ def test_finalize_no_resubmit_when_finished(patched_ddp: dict) -> None:
 
     assert patched_ddp["continuations"] == []
     assert patched_ddp["submits"] == []
+
+
+def test_finalize_submits_evaluation_after_final_save(patched_ddp: dict) -> None:
+    """A finished opt-in trainer submits one evaluation after its checkpoint."""
+    trainer = HarnessTrainer(
+        _make_args(total_epochs=2, cycle_epochs=5),
+        model_builder=_fresh_model_builder,
+        dataset_builder=_dataset_builder,
+        epoch_fn=lambda **k: None,
+        evaluate_after_training=True,
+    )
+    trainer.setup_distributed()
+    trainer.setup()
+    trainer.train()
+    trainer.finalize()
+
+    assert len(patched_ddp["saves"]) == 1
+    assert len(patched_ddp["evaluations"]) == 1
+    evaluation = patched_ddp["evaluations"][0]
+    assert evaluation.checkpointpath == "./study003_modelState_epoch0002.pth"
+    assert evaluation.epochIDX == 2
+    assert patched_ddp["submits"] == ["sbatch study003_evaluation.slurm"]
+
+
+def test_finalize_never_evaluates_unfinished_cycle(patched_ddp: dict) -> None:
+    """An unfinished cycle submits only its continuation."""
+    trainer = HarnessTrainer(
+        _make_args(total_epochs=10, cycle_epochs=2),
+        model_builder=_fresh_model_builder,
+        dataset_builder=_dataset_builder,
+        epoch_fn=lambda **k: None,
+        evaluate_after_training=True,
+    )
+    trainer.setup_distributed()
+    trainer.setup()
+    trainer.train()
+    trainer.finalize()
+
+    assert patched_ddp["evaluations"] == []
+    assert len(patched_ddp["continuations"]) == 1
 
 
 def test_finalize_respects_resubmit_flag(patched_ddp: dict) -> None:

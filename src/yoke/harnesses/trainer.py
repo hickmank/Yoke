@@ -161,8 +161,11 @@ class HarnessTrainer:
         steps_per_epoch (int | None): Number of scheduler steps per epoch used
             to compute ``last_epoch`` on continuation. Defaults to
             ``args.train_batches``.
-        time_epochs (bool): Whether to time and print each epoch. Defaults to
-            ``True``.
+         time_epochs (bool): Whether to time and print each epoch. Defaults to
+             ``True``.
+         evaluate_after_training (bool): Whether to submit the harness's optional
+             evaluation job after successfully saving the final checkpoint.
+             Defaults to ``False``.
     """
 
     def __init__(
@@ -180,6 +183,7 @@ class HarnessTrainer:
         resubmit: bool = True,
         steps_per_epoch: int | None = None,
         time_epochs: bool = True,
+        evaluate_after_training: bool = False,
     ) -> None:
         """Initialize the trainer with parsed args and injected components."""
         self.args = args
@@ -196,6 +200,7 @@ class HarnessTrainer:
             steps_per_epoch if steps_per_epoch is not None else args.train_batches
         )
         self.time_epochs = time_epochs
+        self.evaluate_after_training = evaluate_after_training
 
         # Distributed context, populated by :meth:`setup_distributed`.
         self.rank: int = 0
@@ -413,10 +418,19 @@ class HarnessTrainer:
             extra_state=extra_state,
         )
 
-        if self.rank == 0 and self.resubmit:
-            finished = self.epochIDX + 1 > self.args.total_epochs
-            if not finished:
-                submission_type = getattr(self.args, "submissionType", "slurm")
+        finished = self.epochIDX + 1 > self.args.total_epochs
+        if self.rank == 0:
+            submission_type = getattr(self.args, "submissionType", "slurm")
+            if finished and self.evaluate_after_training:
+                evaluation_file = HarnessStudy.evaluation_setup(
+                    self.new_chkpt_path,
+                    self.args.studyIDX,
+                    self.epochIDX,
+                    submission_type=submission_type,
+                )
+                config = HarnessStudy.SUBMISSION_SYSTEMS[submission_type.lower()]
+                os.system(f"{config['submit']} {evaluation_file}")
+            if self.resubmit and not finished:
                 new_submit_file = HarnessStudy.continuation_setup(
                     self.new_chkpt_path,
                     self.args.studyIDX,

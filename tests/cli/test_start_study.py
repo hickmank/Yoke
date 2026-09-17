@@ -7,17 +7,22 @@ import pytest
 from yoke.cli import start_study
 
 
-def _write_harness(harness_dir: Path) -> None:
+def _write_harness(harness_dir: Path, include_evaluation: bool = False) -> None:
     """Populate a minimal single-template SLURM harness.
 
     Args:
         harness_dir (Path): Directory to populate with harness config files.
+        include_evaluation (bool): Whether to add the optional evaluator artifacts.
     """
     (harness_dir / "hyperparameters.csv").write_text(
         "studyIDX,init_learnrate\n1,0.001\n2,0.002\n"
     )
-    (harness_dir / "cp_files.txt").write_text("train.py\n")
+    cp_files = "train.py\n"
+    if include_evaluation:
+        cp_files += "eval.py\n"
+    (harness_dir / "cp_files.txt").write_text(cp_files)
     (harness_dir / "train.py").write_text("print('train')\n")
+    (harness_dir / "eval.py").write_text("print('eval')\n")
     (harness_dir / "training_input.tmpl").write_text(
         "--init_learnrate=<init_learnrate>\n"
         "--studyIDX=<studyIDX>\n"
@@ -31,6 +36,13 @@ def _write_harness(harness_dir: Path) -> None:
         "#JOB study<studyIDX> epoch <epochIDX>\n"
         "python train.py @<INPUTFILE>\n"
     )
+    if include_evaluation:
+        (harness_dir / "evaluation_input.tmpl").write_text(
+            "--checkpoint=<CHECKPOINT>\n--output=testing_<studyIDX>_<epochIDX>.csv\n"
+        )
+        (harness_dir / "evaluation_slurm.tmpl").write_text(
+            "python eval.py @<INPUTFILE>\n"
+        )
 
 
 def test_main_dryrun_creates_files_and_prints_submit(
@@ -115,3 +127,36 @@ def test_main_shell_submission(
     assert (study_dir / "study001_START.sh").exists()
     assert "[DRY RUN]" in out
     assert "source study001_START.sh" in out
+
+
+def test_main_dryrun_prepares_optional_evaluation_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Dry runs copy evaluators and preserve late-bound evaluation templates."""
+    _write_harness(tmp_path, include_evaluation=True)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "yoke-start-study",
+            "--csv",
+            "hyperparameters.csv",
+            "--rundir",
+            "./runs",
+            "--cpFile",
+            "cp_files.txt",
+            "--submissionType",
+            "slurm",
+            "--dryrun",
+        ],
+    )
+
+    start_study.main()
+
+    for sid in (1, 2):
+        study_dir = tmp_path / "runs" / f"study_{sid:03d}"
+        assert (study_dir / "eval.py").exists()
+        assert (study_dir / "evaluation_input.tmpl").exists()
+        assert (study_dir / "evaluation_slurm.tmpl").exists()
+        assert "<CHECKPOINT>" in (study_dir / "evaluation_input.tmpl").read_text()

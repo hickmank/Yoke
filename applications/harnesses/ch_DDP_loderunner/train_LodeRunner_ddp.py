@@ -139,4 +139,5 @@ if __name__ == "__main__":
             "channel_map": list(range(len(CHANNEL_LIST))),
             "dataset": "pli",
         },
+        evaluate_after_training=True,
     ).run()

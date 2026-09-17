@@ -63,6 +63,10 @@ class HarnessStudy:
             "submit": "source",
         },
     }
+    EVALUATION_SYSTEMS: dict[str, dict[str, str]] = {
+        "slurm": {"template": "evaluation_slurm.tmpl", "ext": "slurm"},
+        "shell": {"template": "evaluation_shell.tmpl", "ext": "sh"},
+    }
 
     def __init__(
         self,
@@ -91,6 +95,23 @@ class HarnessStudy:
         # Template and base files
         self.input_template = self.template_dir / "training_input.tmpl"
         self.submission_template = self.template_dir / self.submission_config["template"]
+        self.evaluation_input_template = self.template_dir / "evaluation_input.tmpl"
+        self.evaluation_config = self.EVALUATION_SYSTEMS[submission_type]
+        self.evaluation_submission_template = (
+            self.template_dir / self.evaluation_config["template"]
+        )
+        evaluation_files = (
+            self.evaluation_input_template,
+            self.evaluation_submission_template,
+        )
+        if any(path.exists() for path in evaluation_files) and not all(
+            path.exists() for path in evaluation_files
+        ):
+            raise ValueError(
+                "Evaluation requires both evaluation_input.tmpl and "
+                f"{self.evaluation_config['template']}."
+            )
+        self.evaluation_enabled = all(path.exists() for path in evaluation_files)
 
         self.rundir.mkdir(parents=True, exist_ok=True)
 
@@ -215,6 +236,7 @@ class HarnessStudy:
                 templates.
             study (dict): Study substitution dictionary.
         """
+        study = dict(study)
         # For templates epochIDX and INPUTFILE should be left as variables.
         study.pop("epochIDX", None)
         study.pop("INPUTFILE", None)
@@ -232,6 +254,28 @@ class HarnessStudy:
             f.write(input_rendered)
         with open(submit_path, "w") as f:
             f.write(submit_rendered)
+
+    def generate_evaluation_templates(self, study_dir: Path, study: dict) -> None:
+        """Render configured evaluation templates with late-bound values preserved.
+
+        Args:
+            study_dir (Path): Directory in which to write the evaluation templates.
+            study (dict): Study substitution dictionary.
+        """
+        if not self.evaluation_enabled:
+            return
+
+        substitutions = dict(study)
+        for key in ("CHECKPOINT", "INPUTFILE", "epochIDX"):
+            substitutions.pop(key, None)
+        input_rendered = self.render_template(
+            self.evaluation_input_template, substitutions
+        )
+        submit_rendered = self.render_template(
+            self.evaluation_submission_template, substitutions
+        )
+        (study_dir / "evaluation_input.tmpl").write_text(input_rendered)
+        (study_dir / self.evaluation_config["template"]).write_text(submit_rendered)
 
     def _render_submission_template(self, study: dict) -> str:
         """Return the rendered submission script for the selected system.
@@ -279,6 +323,7 @@ class HarnessStudy:
 
         self.copy_files(study_dir)
         self.generate_tmpl_inputs(study_dir, study)
+        self.generate_evaluation_templates(study_dir, study)
         submit_path = self.generate_initial_inputs(study_dir, study)
         self.submit_job(study_dir, submit_path)
 
@@ -353,3 +398,55 @@ class HarnessStudy:
             f.write(submission_data)
 
         return new_submission_filepath
+
+    @staticmethod
+    def evaluation_setup(
+        checkpointpath: str,
+        studyIDX: int,
+        epochIDX: int,
+        submission_type: str = "slurm",
+    ) -> str:
+        """Prepare checkpoint-specific evaluation input and submission files.
+
+        This runs from a generated study directory after
+        :meth:`generate_evaluation_templates` has prepared its templates.
+
+        Args:
+            checkpointpath (str): Path to the checkpoint being evaluated.
+            studyIDX (int): Study index used in generated filenames.
+            epochIDX (int): Saved checkpoint epoch used in generated filenames.
+            submission_type (str): Job-submission system, ``"slurm"`` or ``"shell"``.
+
+        Returns:
+            str: Filename of the generated evaluation submission script.
+
+        Raises:
+            ValueError: If ``submission_type`` is unsupported.
+        """
+        submission_type = submission_type.lower()
+        if submission_type not in HarnessStudy.EVALUATION_SYSTEMS:
+            valid = ", ".join(sorted(HarnessStudy.EVALUATION_SYSTEMS))
+            raise ValueError(
+                f"Unknown submission type {submission_type!r}. "
+                f"Supported types are: {valid}."
+            )
+        config = HarnessStudy.EVALUATION_SYSTEMS[submission_type]
+        input_filename = f"study{studyIDX:03d}_evaluation_epoch{epochIDX:04d}.input"
+        submit_filename = (
+            f"study{studyIDX:03d}_evaluation_epoch{epochIDX:04d}.{config['ext']}"
+        )
+        substitutions = {
+            "CHECKPOINT": checkpointpath,
+            "INPUTFILE": input_filename,
+            "studyIDX": studyIDX,
+            "epochIDX": f"{epochIDX:04d}",
+        }
+        input_data = strings.replace_keys(
+            substitutions, Path("evaluation_input.tmpl").read_text()
+        )
+        submission_data = strings.replace_keys(
+            substitutions, Path(config["template"]).read_text()
+        )
+        Path(input_filename).write_text(input_data)
+        Path(submit_filename).write_text(submission_data)
+        return submit_filename

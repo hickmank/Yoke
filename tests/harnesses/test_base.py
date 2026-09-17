@@ -264,6 +264,18 @@ def _write_single_template_harness(harness_dir: Path, submission_type: str) -> N
     )
 
 
+def _write_evaluation_templates(harness_dir: Path, submission_type: str) -> None:
+    """Add minimal evaluation templates to a test harness."""
+    config = HarnessStudy.EVALUATION_SYSTEMS[submission_type]
+    (harness_dir / "evaluation_input.tmpl").write_text(
+        "--checkpoint=<CHECKPOINT>\n"
+        "--output=testing_<studyIDX>_<epochIDX>_<init_learnrate>.csv\n"
+    )
+    (harness_dir / config["template"]).write_text(
+        "python eval.py @<INPUTFILE> epoch=<epochIDX>\n"
+    )
+
+
 @pytest.mark.parametrize("submission_type", ["slurm", "shell"])
 def test_generate_then_continuation_roundtrip(
     tmp_path: Path,
@@ -329,3 +341,42 @@ def test_generate_then_continuation_roundtrip(
     assert "0004" in restart_submit
     assert "<INPUTFILE>" not in restart_submit
     assert "<epochIDX>" not in restart_submit
+
+
+@pytest.mark.parametrize("submission_type", ["slurm", "shell"])
+def test_evaluation_templates_roundtrip(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    submission_type: str,
+) -> None:
+    """Evaluation templates retain late-bound values then render per checkpoint."""
+    harness_dir = tmp_path / "harness"
+    harness_dir.mkdir()
+    _write_single_template_harness(harness_dir, submission_type)
+    _write_evaluation_templates(harness_dir, submission_type)
+    monkeypatch.chdir(harness_dir)
+    harness = HarnessStudy(
+        rundir="./runs",
+        template_dir=".",
+        cp_file="cp_files.txt",
+        submission_type=submission_type,
+        dryrun=True,
+    )
+    harness.run_study(harness.load_hyperparameters("hyperparameters.csv")[0])
+    study_dir = harness_dir / "runs" / "study_001"
+    assert "<CHECKPOINT>" in (study_dir / "evaluation_input.tmpl").read_text()
+    monkeypatch.chdir(study_dir)
+    submission = HarnessStudy.evaluation_setup("final.pth", 1, 12, submission_type)
+    config = HarnessStudy.EVALUATION_SYSTEMS[submission_type]
+    assert submission == f"study001_evaluation_epoch0012.{config['ext']}"
+    input_data = (study_dir / "study001_evaluation_epoch0012.input").read_text()
+    assert "final.pth" in input_data
+    assert "testing_001_0012_0.001.csv" in input_data
+    assert "study001_evaluation_epoch0012.input" in (study_dir / submission).read_text()
+
+
+def test_incomplete_evaluation_templates_raise(tmp_path: Path) -> None:
+    """An enabled but incomplete evaluation configuration fails during setup."""
+    (tmp_path / "evaluation_input.tmpl").write_text("--checkpoint=<CHECKPOINT>\n")
+    with pytest.raises(ValueError, match="Evaluation requires both"):
+        HarnessStudy(template_dir=str(tmp_path), rundir=str(tmp_path / "runs"))
