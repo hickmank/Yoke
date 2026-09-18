@@ -15,8 +15,44 @@ Files
   per study row; the `# <<optional:CONTINUATION>>` block adds `--continuation`
   and `--checkpoint` only on epoch continuation.
 - `training_slurm.tmpl` — complete SLURM submission script (Venado GPU partition).
-- `cp_files.txt` — files copied into each `study_###` run directory.
+- `eval_LodeRunner.py` — harness-local evaluator: loads a saved checkpoint,
+  derives the field ordering from the model's `default_vars`, runs one
+  deterministic test pass, and writes per-sample records plus a sidecar
+  `*.metadata.json`.
+- `evaluation_input.tmpl` / `evaluation_slurm.tmpl` — optional evaluation
+  templates. Late-bound tokens `<CHECKPOINT>`, `<INPUTFILE>`, and `<STEM>` are
+  filled per checkpoint; the rest come from the CSV row at study creation.
+- `cp_files.txt` — files copied into each `study_###` run directory (training
+  and evaluation scripts).
 - `ddp_paper_study.csv` — hyperparameters for the LodeRunner-18channel paper runs.
+
+Evaluation
+----------
+
+Training is a thin wrapper around `yoke.harnesses.trainer.HarnessTrainer` with
+`evaluate_after_training=True`, so a **finished** study automatically submits a
+separate one-GPU evaluation job for its final checkpoint. Evaluation is a
+distinct job (not a phase of training): it does not train, checkpoint, or need
+DDP.
+
+To evaluate any other checkpoint — an earlier epoch, a re-run, or a study that
+predates this feature — use the manual CLI from this directory:
+
+```bash
+yoke-evaluate-study --studyIDX 5 \
+    --checkpoint runs/study_005/study005_modelState_epoch0100.pth
+```
+
+Add `--dryrun` to render the checkpoint-specific `*.input`/`*.slurm` files and
+print the `sbatch` command without submitting. For a study created before the
+evaluation feature (no evaluation templates in its `study_###` directory), the
+CLI re-renders them on demand from `ddp_paper_study.csv` (pass `--csv`) and
+copies `eval_LodeRunner.py` in.
+
+Artifact names derive from the checkpoint *stem*, so an ordinary checkpoint and
+its EMA companion (`..._ema.pth`) never collide. To point the automatic
+evaluation at an EMA companion, pass `evaluate_checkpoint="ema"` to
+`HarnessTrainer` (requires an EMA-enabled harness).
 
 Study
 -----

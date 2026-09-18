@@ -107,6 +107,22 @@ testing_study005_epoch0100.csv
 Names must be checkpoint/epoch-specific. Evaluation must never append a new
 run to an ambiguous generic `testing_evaluation.csv`.
 
+> **Implementation update (stem-based naming).** The shipped implementation
+> derives artifact names from the checkpoint *stem* rather than a separately
+> supplied `epochIDX`, because the checkpoint already carries its own epoch and
+> the exact path is authoritative. Evaluating
+> `study005_modelState_epoch0100.pth` produces:
+>
+> ```text
+> study005_evaluation_study005_modelState_epoch0100.input
+> study005_evaluation_study005_modelState_epoch0100.slurm
+> testing_study005_study005_modelState_epoch0100.csv
+> ```
+>
+> and its EMA companion `study005_modelState_epoch0100_ema.pth` produces the
+> parallel `..._ema` set, so ordinary and EMA outputs never collide. The
+> late-bound token in the input template is `<STEM>` (not `<epochIDX>`).
+
 ## Shared Implementation
 
 ### 1. Extend `HarnessStudy` for optional evaluation artifacts
@@ -184,9 +200,12 @@ public helper rather than replicate rendering logic in shell instructions.
 
 Automatic final evaluation is exactly-once per successful final training job.
 Manual invocation remains intentionally possible for earlier epochs and
-re-evaluation. The generated filenames make overwrite behavior explicit. A
-future enhancement may add a dedicated `yoke-evaluate-study` CLI only after
-multiple users demonstrate that calling the helper is insufficient.
+re-evaluation. The generated filenames make overwrite behavior explicit.
+
+> **Implementation update.** The `yoke-evaluate-study` CLI described in the
+> Implementation Notes was added rather than deferred: it wraps
+> `HarnessStudy.run_evaluation` and handles both feature-era and pre-feature
+> studies. See the Implementation Notes section for the shipped interface.
 
 ## `ch_DDP_loderunner` Reference Implementation
 
@@ -382,3 +401,77 @@ evaluation input and submission script before submitting it.
 - Do not make a single model-agnostic evaluator that hides model/dataset/metric
   differences.
 - Do not alter the Lightning or MNIST demo workflows in this feature.
+
+## Implementation Notes and Deltas
+
+The feature shipped with the following refinements to the plan above. They
+preserve every design goal (opt-in, separate job, exactly-once automatic
+evaluation, no `yoke-start-study` flag changes) while filling gaps found during
+implementation.
+
+### Stem-based artifact naming (replaces `epochIDX` argument)
+
+`HarnessStudy.evaluation_setup(checkpointpath, studyIDX, submission_type)` no
+longer takes an `epochIDX`. The checkpoint path is authoritative and already
+encodes its epoch; artifact names derive from the checkpoint *stem*, and the
+per-record epoch written into the CSV still comes from the checkpoint metadata
+inside the evaluator. Evaluation templates use the late-bound token `<STEM>`
+(alongside `<CHECKPOINT>` and `<INPUTFILE>`) instead of `<epochIDX>`. This makes
+ordinary and EMA companion outputs distinct by construction.
+
+### Shared render-and-submit path: `HarnessStudy.run_evaluation`
+
+The plan left submission split between `evaluation_setup` (render only) and an
+inline `os.system` call in `HarnessTrainer.finalize`, unlike `continuation_setup`
+and `submit_job`. The implementation adds an instance method
+`HarnessStudy.run_evaluation(study_dir, checkpointpath, study=None)` that:
+
+1. ensures the study directory holds rendered evaluation templates, rendering
+   them on demand from the harness `template_dir` + CSV row when absent (so a
+   study produced *before* this feature can still be evaluated);
+2. copies the evaluator and other `cp_files.txt` entries when it renders on
+   demand;
+3. calls `evaluation_setup` from within the study directory;
+4. submits from within the study directory in a subshell, honoring `--dryrun`;
+5. returns `None` (a no-op) when the harness has no evaluation configured.
+
+`HarnessTrainer.finalize` now calls `run_evaluation` instead of a bare
+`os.system`, so automatic and manual evaluation share one submission path.
+
+### Manual interface: `yoke-evaluate-study` CLI
+
+A new installed console script (`yoke.cli.evaluate_study:main`, entry point in
+`pyproject.toml`) provides the manual interface the plan deferred. Run from a
+harness directory:
+
+```bash
+yoke-evaluate-study --studyIDX 5 \
+    --checkpoint runs/study_005/study005_modelState_epoch0100.pth
+```
+
+Flags: `--studyIDX` (required), `--checkpoint` (required, full path — an EMA
+companion is simply a different path), `--rundir`, `--csv`, `--cpFile`,
+`--submissionType`, `--dryrun`. It constructs a `HarnessStudy`, resolves the
+`runs/study_###` directory and its CSV row (used only to re-render missing eval
+templates), and calls `run_evaluation`. This covers both feature-era and
+pre-feature studies and re-evaluation of any epoch.
+
+### Automatic EMA checkpoint selection
+
+`HarnessTrainer` gained `evaluate_checkpoint: str = "main"`. When set to
+`"ema"`, `finalize` evaluates the class-aware EMA companion
+(`..._ema.pth`, written by `yoke.utils.ema.make_ema_hooks`) instead of the main
+`.pth`; that companion loads exactly like the main checkpoint, so the evaluator
+needs no changes, and stem-based naming keeps its outputs separate. Selecting
+`"ema"` when no companion was written raises `FileNotFoundError`; an unknown
+value raises `ValueError` at construction.
+
+### Open items (not addressed)
+
+- **Deterministic sampling policy (revisit).** The temporal dataset's
+  `deterministic=True` mode derives time pairs from the sample index and the
+  evaluator records a policy string in its metadata JSON, but no seed is
+  captured (there is no RNG in that path). Confirm this is sufficient for
+  cross-run comparability or record an explicit policy/seed.
+- **Hard-coded data paths in `evaluation_input.tmpl`.** `FILELIST_DIR` and
+  `LSC_NPZ_DIR` are fixed harness values rather than CSV keys. Accepted as-is.

@@ -117,6 +117,10 @@ A harness directory (e.g. `applications/harnesses/ch_DDP_loderunner/`) contains:
 - **A hyperparameter CSV** — first column is `studyIDX` (the index); remaining columns are
   `<KEY>` values varied per study.
 - **`README.md`** — notes on the study.
+- **(optional) evaluation files** — `evaluation_input.tmpl`, `evaluation_slurm.tmpl`
+  (or `evaluation_shell.tmpl`), and a harness-local `eval_<harness>.py` (listed in
+  `cp_files.txt`). Present only for harnesses that opt into post-training evaluation;
+  see the evaluation subsection below.
 
 ### Launch flow (`yoke-start-study` / `HarnessStudy`)
 The `yoke-start-study` CLI (`src/yoke/cli/start_study.py`) parses `--csv`, `--rundir`,
@@ -146,6 +150,31 @@ substitution tokens: `<studyIDX>`, `<epochIDX>`, `<INPUTFILE>`, `<CONTINUATION>`
 `<studyIDX>` -> zero-padded 3 digits; ints -> `%d`; floats -> str; bool/str -> str. Unknown
 types raise `ValueError`.
 
+### Post-training evaluation (opt-in, separate job)
+A finished study can submit a **separate** test-set evaluation job for its final checkpoint.
+This is opt-in and off by default. A harness enables it by shipping the optional evaluation
+files (above) and passing `evaluate_after_training=True` to `HarnessTrainer`. Evaluation is a
+distinct job, not a training phase: it does not train, checkpoint, or need DDP.
+
+- `HarnessStudy.generate_evaluation_templates` renders the eval templates at study creation
+  from the CSV row, leaving `<CHECKPOINT>`, `<INPUTFILE>`, and `<STEM>` late-bound.
+- `HarnessStudy.evaluation_setup(checkpointpath, studyIDX, submission_type)` renders the
+  checkpoint-specific `.input`/submission files. Names derive from the checkpoint **stem**
+  (not an `epochIDX` arg): e.g. `study005_evaluation_study005_modelState_epoch0100.input`.
+  The evaluator reads its record epoch from the checkpoint metadata.
+- `HarnessStudy.run_evaluation(study_dir, checkpointpath, study=None)` is the shared
+  render-and-submit path (honors `--dryrun`). It renders eval templates on demand from the
+  harness dir + CSV row when a study directory lacks them (so pre-feature studies work), then
+  submits. Returns `None` if the harness has no evaluation configured.
+- `HarnessTrainer.finalize` calls `run_evaluation` on rank 0 exactly once when finished and
+  `evaluate_after_training=True`. `evaluate_checkpoint="main"` (default) evaluates the primary
+  `.pth`; `evaluate_checkpoint="ema"` evaluates the class-aware `..._ema.pth` companion.
+- Manual interface: the installed `yoke-evaluate-study` CLI (`src/yoke/cli/evaluate_study.py`)
+  evaluates any checkpoint of an existing study: `yoke-evaluate-study --studyIDX N
+  --checkpoint <path> [--dryrun]`. Point `--checkpoint` at `..._ema.pth` to evaluate EMA.
+
+The bespoke `moving_mnist`/`mnist_surrogate` demos and the Lightning harness are excluded.
+
 ---
 
 ## 5. The `start_study` design
@@ -166,6 +195,8 @@ Design points baked into the code:
 - A **single generic `HarnessStudy`** parameterized by template files — no per-harness
   subclasses/registry.
 - Continuation logic lives **in `HarnessStudy.continuation_setup`** (static method).
+- Post-training evaluation logic lives **in `HarnessStudy.run_evaluation` /
+  `evaluation_setup`**; the installed `yoke-evaluate-study` CLI is the manual entry point.
 
 ---
 
@@ -248,6 +279,10 @@ ruff check && ruff format --check --diff
 # the yoke-start-study CLI, run from inside a harness dir
 yoke-start-study --csv <hyperparams.csv> --rundir ./runs --cpFile cp_files.txt \
                  --submissionType slurm   # or: shell
+
+# manually evaluate a checkpoint of an existing study, from inside a harness dir
+yoke-evaluate-study --studyIDX <N> --checkpoint runs/study_<NNN>/<checkpoint>.pth \
+                    --dryrun   # render + print submit cmd without submitting
 
 # compare current branch to stable
 git diff main --stat

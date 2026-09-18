@@ -166,7 +166,17 @@ class HarnessTrainer:
          evaluate_after_training (bool): Whether to submit the harness's optional
              evaluation job after successfully saving the final checkpoint.
              Defaults to ``False``.
+         evaluate_checkpoint (str): Which checkpoint the automatic evaluation
+             should target when ``evaluate_after_training`` is enabled. ``"main"``
+             (default) evaluates the ordinary ``.pth`` checkpoint just written;
+             ``"ema"`` evaluates the class-aware EMA companion
+             (``..._ema.pth``) written by :func:`yoke.utils.ema.make_ema_hooks`.
+             ``"ema"`` is only valid for EMA-enabled harnesses; if the companion
+             is missing at finalize time a ``FileNotFoundError`` is raised.
     """
+
+    #: Accepted values for ``evaluate_checkpoint``.
+    _EVAL_CHECKPOINT_CHOICES = ("main", "ema")
 
     def __init__(
         self,
@@ -184,6 +194,7 @@ class HarnessTrainer:
         steps_per_epoch: int | None = None,
         time_epochs: bool = True,
         evaluate_after_training: bool = False,
+        evaluate_checkpoint: str = "main",
     ) -> None:
         """Initialize the trainer with parsed args and injected components."""
         self.args = args
@@ -201,6 +212,13 @@ class HarnessTrainer:
         )
         self.time_epochs = time_epochs
         self.evaluate_after_training = evaluate_after_training
+        if evaluate_checkpoint not in self._EVAL_CHECKPOINT_CHOICES:
+            valid = ", ".join(self._EVAL_CHECKPOINT_CHOICES)
+            raise ValueError(
+                f"Unknown evaluate_checkpoint {evaluate_checkpoint!r}. "
+                f"Supported values are: {valid}."
+            )
+        self.evaluate_checkpoint = evaluate_checkpoint
 
         # Distributed context, populated by :meth:`setup_distributed`.
         self.rank: int = 0
@@ -391,6 +409,45 @@ class HarnessTrainer:
     # ------------------------------------------------------------------
     # Finalize
     # ------------------------------------------------------------------
+    def _evaluation_checkpoint_path(self) -> str:
+        """Return the checkpoint path the automatic evaluation should target.
+
+        For ``evaluate_checkpoint == "main"`` this is the primary ``.pth``
+        checkpoint just written. For ``"ema"`` it is the class-aware EMA
+        companion (``..._ema.pth``) written by
+        :func:`yoke.utils.ema.make_ema_hooks`, which loads exactly like the main
+        checkpoint (so the evaluator needs no special handling). Using the EMA
+        companion also yields distinct, non-colliding evaluation artifacts
+        because :meth:`HarnessStudy.evaluation_setup` names them from the
+        checkpoint stem.
+
+        Returns:
+            str: The checkpoint path to evaluate.
+
+        Raises:
+            RuntimeError: If called before the primary checkpoint path is set.
+            FileNotFoundError: If ``"ema"`` is selected but the EMA companion
+                checkpoint is absent (e.g. the harness did not enable EMA).
+        """
+        if self.new_chkpt_path is None:
+            raise RuntimeError(
+                "Evaluation checkpoint path requested before the primary "
+                "checkpoint was saved."
+            )
+        if self.evaluate_checkpoint == "main":
+            return self.new_chkpt_path
+
+        # "ema": companion written alongside the main checkpoint.
+        ema_path = self.new_chkpt_path.replace(".pth", "_ema.pth")
+        if not os.path.exists(ema_path):
+            raise FileNotFoundError(
+                f"evaluate_checkpoint='ema' was requested but the EMA companion "
+                f"checkpoint {ema_path!r} does not exist. Ensure the harness "
+                "maintains an EMA shadow (e.g. via make_ema_hooks) before "
+                "selecting EMA evaluation."
+            )
+        return ema_path
+
     def finalize(self) -> None:
         """Checkpoint the model and, if unfinished, resubmit a continuation job.
 
@@ -431,7 +488,7 @@ class HarnessTrainer:
                     rundir=".",
                     submission_type=submission_type,
                 )
-                study.run_evaluation(".", self.new_chkpt_path)
+                study.run_evaluation(".", self._evaluation_checkpoint_path())
             if self.resubmit and not finished:
                 new_submit_file = HarnessStudy.continuation_setup(
                     self.new_chkpt_path,
