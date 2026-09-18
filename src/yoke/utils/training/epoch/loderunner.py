@@ -19,6 +19,29 @@ from yoke.utils.training.datastep.loderunner import (
     eval_DDP_loderunner_2frame_datastep,
 )
 
+# These datastep functions are resolved dynamically at runtime via
+# ``globals()[...]`` using the ``DATASTEP_FN`` dispatch table below, so they must
+# remain importable in this module's namespace. Re-export them explicitly so
+# static analysis recognizes the imports as intentional rather than unused.
+__all__ = [
+    "train_loderunner_datastep",
+    "eval_loderunner_datastep",
+    "eval_loderunner_datastep_cylex",
+    "train_scheduled_loderunner_datastep",
+    "eval_scheduled_loderunner_datastep",
+    "train_DDP_loderunner_datastep",
+    "eval_DDP_loderunner_datastep",
+    "train_DDP_loderunner_datastep_cylex",
+    "eval_DDP_loderunner_datastep_cylex",
+    "train_DDP_loderunner_2frame_datastep",
+    "eval_DDP_loderunner_2frame_datastep",
+    "train_simple_loderunner_epoch",
+    "train_scheduled_loderunner_epoch",
+    "train_LRsched_loderunner_epoch",
+    "train_DDP_loderunner_epoch",
+    "eval_loderunner_epoch",
+]
+
 DATASTEP_FN = {
     "pli": {
         "train_ddp": "train_DDP_loderunner_datastep",

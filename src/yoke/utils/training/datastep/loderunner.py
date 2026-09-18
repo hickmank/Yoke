@@ -237,15 +237,15 @@ def train_DDP_loderunner_datastep(
 
 def train_DDP_loderunner_datastep_cylex(
     data: tuple,
-    model,
-    optimizer,
-    loss_fn,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    loss_fn: torch.nn.Module,
     device: torch.device,
     rank: int,
     world_size: int,
     channel_map: list[int] = None,
     grad_clip: float | None = None,
-):
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
     """A DDP-compatible training step for multi-input, multi-output data.
 
     Args:
@@ -503,6 +503,7 @@ def eval_loderunner_datastep(
 
     return end_img, pred_img, per_sample_loss
 
+
 def eval_loderunner_datastep_cylex(
     data: tuple,
     model: torch.nn.Module,
@@ -686,12 +687,12 @@ def eval_DDP_loderunner_datastep(
 
 def eval_DDP_loderunner_datastep_cylex(
     data: tuple,
-    model,
-    loss_fn,
+    model: torch.nn.Module,
+    loss_fn: torch.nn.Module,
     device: torch.device,
     rank: int,
     world_size: int,
-):
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
     """A DDP-compatible evaluation step.
 
     Args:

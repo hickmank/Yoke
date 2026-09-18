@@ -7,6 +7,7 @@ DiffusionLodeRunner model using denoising score matching objective.
 import torch
 import torch.distributed as dist
 
+
 ####################################
 # Training on a Datastep
 ####################################
@@ -342,16 +343,18 @@ if __name__ == "__main__":
     print(f"\nUsing device: {device}")
 
     # Define variables for LSC dataset
-    in_vars = np.array([
-        "density_case",
-        "density_cushion",
-        "density_maincharge",
-        "density_outside_air",
-        "density_striker",
-        "density_throw",
-        "Uvelocity",
-        "Wvelocity",
-    ])
+    in_vars = np.array(
+        [
+            "density_case",
+            "density_cushion",
+            "density_maincharge",
+            "density_outside_air",
+            "density_striker",
+            "density_throw",
+            "Uvelocity",
+            "Wvelocity",
+        ]
+    )
     out_vars = in_vars  # Same variables for input and output
 
     # Create dataset
