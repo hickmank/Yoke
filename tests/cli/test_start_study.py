@@ -38,7 +38,7 @@ def _write_harness(harness_dir: Path, include_evaluation: bool = False) -> None:
     )
     if include_evaluation:
         (harness_dir / "evaluation_input.tmpl").write_text(
-            "--checkpoint=<CHECKPOINT>\n--output=testing_<studyIDX>_<epochIDX>.csv\n"
+            "--checkpoint=<CHECKPOINT>\n--output=testing_<studyIDX>_<STEM>.csv\n"
         )
         (harness_dir / "evaluation_slurm.tmpl").write_text(
             "python eval.py @<INPUTFILE>\n"

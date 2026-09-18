@@ -422,14 +422,16 @@ class HarnessTrainer:
         if self.rank == 0:
             submission_type = getattr(self.args, "submissionType", "slurm")
             if finished and self.evaluate_after_training:
-                evaluation_file = HarnessStudy.evaluation_setup(
-                    self.new_chkpt_path,
-                    self.args.studyIDX,
-                    self.epochIDX,
+                # The trainer runs from within the study directory on the compute
+                # node, so the rendered evaluation templates and evaluator are
+                # already present here. Route submission through the shared
+                # HarnessStudy path rather than a bespoke os.system call.
+                study = HarnessStudy(
+                    template_dir=".",
+                    rundir=".",
                     submission_type=submission_type,
                 )
-                config = HarnessStudy.SUBMISSION_SYSTEMS[submission_type.lower()]
-                os.system(f"{config['submit']} {evaluation_file}")
+                study.run_evaluation(".", self.new_chkpt_path)
             if self.resubmit and not finished:
                 new_submit_file = HarnessStudy.continuation_setup(
                     self.new_chkpt_path,

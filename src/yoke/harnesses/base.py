@@ -64,8 +64,16 @@ class HarnessStudy:
         },
     }
     EVALUATION_SYSTEMS: dict[str, dict[str, str]] = {
-        "slurm": {"template": "evaluation_slurm.tmpl", "ext": "slurm"},
-        "shell": {"template": "evaluation_shell.tmpl", "ext": "sh"},
+        "slurm": {
+            "template": "evaluation_slurm.tmpl",
+            "ext": "slurm",
+            "submit": "sbatch",
+        },
+        "shell": {
+            "template": "evaluation_shell.tmpl",
+            "ext": "sh",
+            "submit": "source",
+        },
     }
 
     def __init__(
@@ -266,7 +274,7 @@ class HarnessStudy:
             return
 
         substitutions = dict(study)
-        for key in ("CHECKPOINT", "INPUTFILE", "epochIDX"):
+        for key in ("CHECKPOINT", "INPUTFILE", "STEM", "epochIDX"):
             substitutions.pop(key, None)
         input_rendered = self.render_template(
             self.evaluation_input_template, substitutions
@@ -403,18 +411,22 @@ class HarnessStudy:
     def evaluation_setup(
         checkpointpath: str,
         studyIDX: int,
-        epochIDX: int,
         submission_type: str = "slurm",
     ) -> str:
         """Prepare checkpoint-specific evaluation input and submission files.
 
         This runs from a generated study directory after
-        :meth:`generate_evaluation_templates` has prepared its templates.
+        :meth:`generate_evaluation_templates` (or :meth:`run_evaluation`) has
+        prepared its templates. The checkpoint path is authoritative: the epoch
+        that appears in evaluation records comes from the checkpoint metadata
+        itself, while the generated artifact names are derived from the
+        checkpoint *stem*. Using the stem keeps the ordinary and EMA companion
+        checkpoints (``..._epoch0100.pth`` vs ``..._epoch0100_ema.pth``) from
+        colliding on output filenames.
 
         Args:
             checkpointpath (str): Path to the checkpoint being evaluated.
             studyIDX (int): Study index used in generated filenames.
-            epochIDX (int): Saved checkpoint epoch used in generated filenames.
             submission_type (str): Job-submission system, ``"slurm"`` or ``"shell"``.
 
         Returns:
@@ -431,15 +443,16 @@ class HarnessStudy:
                 f"Supported types are: {valid}."
             )
         config = HarnessStudy.EVALUATION_SYSTEMS[submission_type]
-        input_filename = f"study{studyIDX:03d}_evaluation_epoch{epochIDX:04d}.input"
-        submit_filename = (
-            f"study{studyIDX:03d}_evaluation_epoch{epochIDX:04d}.{config['ext']}"
-        )
+        # Derive artifact names from the checkpoint stem so that distinct
+        # checkpoints (including EMA companions) never share output files.
+        stem = Path(checkpointpath).stem
+        input_filename = f"study{studyIDX:03d}_evaluation_{stem}.input"
+        submit_filename = f"study{studyIDX:03d}_evaluation_{stem}.{config['ext']}"
         substitutions = {
             "CHECKPOINT": checkpointpath,
             "INPUTFILE": input_filename,
             "studyIDX": studyIDX,
-            "epochIDX": f"{epochIDX:04d}",
+            "STEM": stem,
         }
         input_data = strings.replace_keys(
             substitutions, Path("evaluation_input.tmpl").read_text()
@@ -449,4 +462,117 @@ class HarnessStudy:
         )
         Path(input_filename).write_text(input_data)
         Path(submit_filename).write_text(submission_data)
+        return submit_filename
+
+    def run_evaluation(
+        self,
+        study_dir: str,
+        checkpointpath: str,
+        study: dict | None = None,
+    ) -> str | None:
+        """Render and submit an evaluation job for a single checkpoint.
+
+        This is the shared render-and-submit path used by both automatic
+        (:class:`~yoke.harnesses.trainer.HarnessTrainer`) and manual
+        (``yoke-evaluate-study``) evaluation. It:
+
+        1. Ensures the study directory holds rendered evaluation templates
+           (``evaluation_input.tmpl`` and the submission template). If they are
+           missing -- e.g. a study produced before this feature existed -- they
+           are rendered on demand from ``self.template_dir`` using ``study``,
+           reproducing the same CSV-derived keys training used.
+        2. Ensures the evaluator program and any other ``cp_file`` entries are
+           present in the study directory, copying them if necessary.
+        3. Renders the checkpoint-specific input/submission files via
+           :meth:`evaluation_setup` (from within ``study_dir``).
+        4. Submits the rendered script with the evaluation submit command,
+           honoring ``--dryrun`` exactly like :meth:`submit_job`.
+
+        The ``studyIDX`` used for artifact naming is read from ``study`` when
+        provided, otherwise parsed from the ``study_###`` directory name. The
+        checkpoint path is authoritative for the evaluated epoch; artifact names
+        derive from the checkpoint stem.
+
+        Args:
+            study_dir (str): Path to the ``runs/study_###`` directory.
+            checkpointpath (str): Path to the checkpoint to evaluate. May be an
+                ordinary checkpoint or an EMA companion (``..._ema.pth``). It is
+                resolved to an absolute path so it remains valid after changing
+                into ``study_dir``.
+            study (dict | None): Substitution dictionary (a CSV row) used only to
+                render missing evaluation templates and to supply ``studyIDX``.
+                May be ``None`` when the study directory already contains rendered
+                evaluation templates.
+
+        Returns:
+            str | None: The submission-script filename, or ``None`` if evaluation
+            is not configured for this harness (no templates in the study
+            directory and none defined by the harness).
+
+        Raises:
+            ValueError: If evaluation templates are missing from the study
+                directory but the harness *does* define them, yet no ``study``
+                row was supplied to render them; or if ``studyIDX`` cannot be
+                determined.
+        """
+        study_dir = Path(study_dir)
+        study_dir.mkdir(parents=True, exist_ok=True)
+
+        # Determine studyIDX from the provided row or the directory name.
+        if study is not None and "studyIDX" in study:
+            studyIDX = int(study["studyIDX"])
+        else:
+            try:
+                studyIDX = int(study_dir.name.split("_")[-1])
+            except (IndexError, ValueError) as exc:
+                raise ValueError(
+                    f"Could not determine studyIDX from directory {study_dir.name!r}; "
+                    "pass a study dict containing 'studyIDX'."
+                ) from exc
+
+        eval_input = study_dir / "evaluation_input.tmpl"
+        eval_submit = study_dir / self.evaluation_config["template"]
+
+        # Render evaluation templates on demand for studies that predate the
+        # feature (or whose templates were not generated at launch).
+        if not (eval_input.exists() and eval_submit.exists()):
+            if not self.evaluation_enabled:
+                # Neither the study directory nor the harness defines evaluation
+                # templates: this harness simply has no evaluation configured.
+                print(
+                    "Evaluation is not configured for this harness "
+                    f"({self.template_dir} defines no evaluation templates and none "
+                    f"are present in {study_dir}); nothing to do."
+                )
+                return None
+            if study is None:
+                raise ValueError(
+                    "Evaluation templates are missing from the study directory and "
+                    "no study row was provided to render them. Supply the CSV row "
+                    "for this study so the templates can be reproduced."
+                )
+            self.generate_evaluation_templates(study_dir, study)
+            self.copy_files(study_dir)
+
+        # Resolve the checkpoint to an absolute path before changing directory.
+        checkpoint_abs = str(Path(checkpointpath).resolve())
+
+        config = self.EVALUATION_SYSTEMS[self.submission_type]
+        cwd = os.getcwd()
+        try:
+            os.chdir(study_dir)
+            submit_filename = self.evaluation_setup(
+                checkpoint_abs, studyIDX, self.submission_type
+            )
+        finally:
+            os.chdir(cwd)
+
+        # Submit from within the study directory in a subshell so relative
+        # paths in the submission script (its @-input file, --output/--error)
+        # resolve there and the caller's working directory is left unchanged.
+        submit_str = f"( cd {study_dir}; {config['submit']} {submit_filename} )"
+        if self.DRYRUN:
+            print(f"[DRY RUN] Would execute: {submit_str}.")
+        else:
+            os.system(submit_str)
         return submit_filename

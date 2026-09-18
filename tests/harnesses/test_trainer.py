@@ -152,25 +152,38 @@ def patched_ddp(monkeypatch: pytest.MonkeyPatch) -> dict:
         trainer_mod.HarnessStudy, "continuation_setup", staticmethod(_fake_continuation)
     )
 
-    def _fake_evaluation(
-        checkpointpath: str,
-        studyIDX: int,
-        epochIDX: int,
+    # The trainer constructs a HarnessStudy and calls run_evaluation for the
+    # final checkpoint. Stub the constructor (avoid filesystem/template checks)
+    # and record run_evaluation invocations.
+    def _fake_init(
+        self: object,
+        rundir: str = "./runs",
+        template_dir: str = ".",
+        cp_file: str = "cp_files.txt",
         submission_type: str = "slurm",
+        dryrun: bool = False,
+    ) -> None:
+        self.submission_type = submission_type.lower()
+        self.DRYRUN = dryrun
+
+    monkeypatch.setattr(trainer_mod.HarnessStudy, "__init__", _fake_init)
+
+    def _fake_run_evaluation(
+        self: object,
+        study_dir: str,
+        checkpointpath: str,
+        study: dict | None = None,
     ) -> str:
         recorder["evaluations"].append(
             SimpleNamespace(
+                study_dir=study_dir,
                 checkpointpath=checkpointpath,
-                studyIDX=studyIDX,
-                epochIDX=epochIDX,
-                submission_type=submission_type,
+                submission_type=self.submission_type,
             )
         )
         return "study003_evaluation.slurm"
 
-    monkeypatch.setattr(
-        trainer_mod.HarnessStudy, "evaluation_setup", staticmethod(_fake_evaluation)
-    )
+    monkeypatch.setattr(trainer_mod.HarnessStudy, "run_evaluation", _fake_run_evaluation)
     monkeypatch.setattr(
         trainer_mod.os, "system", lambda cmd: recorder["submits"].append(cmd)
     )
@@ -377,8 +390,11 @@ def test_finalize_submits_evaluation_after_final_save(patched_ddp: dict) -> None
     assert len(patched_ddp["evaluations"]) == 1
     evaluation = patched_ddp["evaluations"][0]
     assert evaluation.checkpointpath == "./study003_modelState_epoch0002.pth"
-    assert evaluation.epochIDX == 2
-    assert patched_ddp["submits"] == ["sbatch study003_evaluation.slurm"]
+    assert evaluation.study_dir == "."
+    assert evaluation.submission_type == "slurm"
+    # Submission is routed through run_evaluation, not a bare os.system call
+    # in finalize; the continuation os.system path stays unused when finished.
+    assert patched_ddp["submits"] == []
 
 
 def test_finalize_never_evaluates_unfinished_cycle(patched_ddp: dict) -> None:
