@@ -276,6 +276,10 @@ dataset or a documented seeded sampling mode with worker seeding. The evaluator
 must record that seed/policy in its metadata. Do not describe repeated random
 draws as multiple evaluation epochs.
 
+> **Superseded.** This deterministic/seeded sampling requirement was tried and
+> then removed; the evaluator uses the ordinary stochastic dataset and controls
+> rigor via `--test_batches`. See "Resolved items" at the end of this document.
+
 ### Templates and copied files
 
 Move the active evaluation workflow out of the `eval/` subdirectory into the
@@ -468,10 +472,19 @@ value raises `ValueError` at construction.
 
 ### Open items (not addressed)
 
-- **Deterministic sampling policy (revisit).** The temporal dataset's
-  `deterministic=True` mode derives time pairs from the sample index and the
-  evaluator records a policy string in its metadata JSON, but no seed is
-  captured (there is no RNG in that path). Confirm this is sufficient for
-  cross-run comparability or record an explicit policy/seed.
 - **Hard-coded data paths in `evaluation_input.tmpl`.** `FILELIST_DIR` and
   `LSC_NPZ_DIR` are fixed harness values rather than CSV keys. Accepted as-is.
+
+### Resolved items
+
+- **Deterministic sampling policy (removed).** An earlier iteration added a
+  `deterministic=True` mode to `LSC_rho2rho_temporal_DataSet` that derived time
+  pairs from the sample index. It was removed: its index math swept only a thin,
+  lopsided slice of the sample space (the index is taken mod the ~530 prefixes),
+  it entangled the time-pair choice with the file-existence retry counter, and it
+  oversold "determinism" it did not actually deliver. The test set is large
+  (~530 sims x ~100 timesteps x offset choices), so collisions are negligible and
+  the error distribution is stable across draws when evaluating enough samples.
+  Evaluation now uses the ordinary stochastic dataset and controls rigor solely
+  through `--test_batches`. No seed is captured; eval runs are intentionally not
+  bit-reproducible.

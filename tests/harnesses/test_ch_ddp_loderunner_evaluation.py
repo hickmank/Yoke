@@ -78,7 +78,9 @@ def test_evaluator_uses_checkpoint_fields_and_epoch(
     assert isinstance(dataset_kwargs, dict)
     assert dataset_kwargs["file_prefix_list"] == "/filelists/test.txt"
     assert dataset_kwargs["max_timeIDX_offset"] == 3
-    assert dataset_kwargs["deterministic"] is True
+    # The evaluator uses the ordinary stochastic dataset; there is no
+    # deterministic sampling mode. Rigor is controlled by --test_batches.
+    assert "deterministic" not in dataset_kwargs
     assert dataset_kwargs["hydro_fields"].tolist() == FakeModel.default_vars
     epoch_kwargs = captured["epoch_kwargs"]
     assert isinstance(epoch_kwargs, dict)

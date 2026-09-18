@@ -1,4 +1,4 @@
-"""Evaluate a saved LodeRunner checkpoint on a deterministic LSC test pass."""
+"""Evaluate a saved LodeRunner checkpoint on an LSC test pass."""
 
 import argparse
 import json
@@ -18,7 +18,7 @@ from yoke.utils.training.epoch.loderunner import eval_loderunner_epoch
 
 parser = argparse.ArgumentParser(
     prog="LodeRunner Evaluation",
-    description="Evaluate one deterministic test pass for a saved checkpoint.",
+    description="Evaluate one test pass for a saved checkpoint.",
     fromfile_prefix_chars="@",
 )
 parser.add_argument("--checkpoint", required=True)
@@ -63,7 +63,6 @@ def main(args: argparse.Namespace) -> None:
         max_file_checks=10,
         half_image=True,
         hydro_fields=np.array(fields),
-        deterministic=True,
     )
     dataloader = DataLoader(
         dataset,
@@ -90,7 +89,9 @@ def main(args: argparse.Namespace) -> None:
         "fields": fields,
         "max_timeIDX_offset": args.max_timeIDX_offset,
         "test_batches": args.test_batches,
-        "sampling_policy": "deterministic index-derived temporal pairs",
+        "sampling_policy": (
+            "random temporal pairs; test_batches bounds the number of samples"
+        ),
         "command": sys.argv,
     }
     Path(f"{args.test_rcrd_filename}.metadata.json").write_text(
