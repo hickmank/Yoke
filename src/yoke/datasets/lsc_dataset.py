@@ -723,7 +723,7 @@ class LSC_rho2rho_temporal_DataSet(Dataset):
                                    argument controls the maximum number of times indices
                                    are generated before throwing an error.
             half_image (bool): If True then returned images are NOT reflected about axis
-                               of symmetry and half-images are returned instead.
+                                of symmetry and half-images are returned instead.
             hydro_fields (np.array, optional): Array of hydro field names to be included.
                                                Defaults to:
                                                [
@@ -748,7 +748,6 @@ class LSC_rho2rho_temporal_DataSet(Dataset):
         with open(file_prefix_list) as f:
             self.file_prefix_list = [line.rstrip() for line in f]
 
-        # Shuffle the list of prefixes in-place
         random.shuffle(self.file_prefix_list)
 
         self.Nsamples = len(self.file_prefix_list)

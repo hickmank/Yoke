@@ -19,23 +19,47 @@ from yoke.utils.training.datastep.loderunner import (
     eval_DDP_loderunner_2frame_datastep,
 )
 
+# These datastep functions are resolved dynamically at runtime via
+# ``globals()[...]`` using the ``DATASTEP_FN`` dispatch table below, so they must
+# remain importable in this module's namespace. Re-export them explicitly so
+# static analysis recognizes the imports as intentional rather than unused.
+__all__ = [
+    "train_loderunner_datastep",
+    "eval_loderunner_datastep",
+    "eval_loderunner_datastep_cylex",
+    "train_scheduled_loderunner_datastep",
+    "eval_scheduled_loderunner_datastep",
+    "train_DDP_loderunner_datastep",
+    "eval_DDP_loderunner_datastep",
+    "train_DDP_loderunner_datastep_cylex",
+    "eval_DDP_loderunner_datastep_cylex",
+    "train_DDP_loderunner_2frame_datastep",
+    "eval_DDP_loderunner_2frame_datastep",
+    "train_simple_loderunner_epoch",
+    "train_scheduled_loderunner_epoch",
+    "train_LRsched_loderunner_epoch",
+    "train_DDP_loderunner_epoch",
+    "eval_loderunner_epoch",
+]
+
 DATASTEP_FN = {
     "pli": {
         "train_ddp": "train_DDP_loderunner_datastep",
         "eval_ddp": "eval_DDP_loderunner_datastep",
-        "eval": "eval_loderunner_datastep"
+        "eval": "eval_loderunner_datastep",
     },
     "pli_2frame": {
         "train_ddp": "train_DDP_loderunner_2frame_datastep",
         "eval_ddp": "eval_DDP_loderunner_2frame_datastep",
-        "eval": "eval_loderunner_datastep"
+        "eval": "eval_loderunner_datastep",
     },
     "cylex": {
         "train_ddp": "train_DDP_loderunner_datastep_cylex",
         "eval_ddp": "eval_DDP_loderunner_datastep_cylex",
-        "eval": "eval_loderunner_datastep_cylex"
+        "eval": "eval_loderunner_datastep_cylex",
     },
 }
+
 
 def train_simple_loderunner_epoch(
     channel_map: list,
@@ -427,7 +451,7 @@ def train_DDP_loderunner_epoch(
         raise ValueError(f"Unsupported dataset: {dataset}")
 
     train_fn = globals()[dataset_fns["train_ddp"]]
-    eval_fn  = globals()[dataset_fns["eval_ddp"]]
+    eval_fn = globals()[dataset_fns["eval_ddp"]]
 
     # Training loop
     model.train()
@@ -442,8 +466,15 @@ def train_DDP_loderunner_epoch(
 
             # Training
             truth, pred, train_losses = train_fn(
-                traindata, model, optimizer, loss_fn, device, rank, world_size,
-                channel_map, grad_clip=grad_clip,
+                traindata,
+                model,
+                optimizer,
+                loss_fn,
+                device,
+                rank,
+                world_size,
+                channel_map,
+                grad_clip=grad_clip,
             )
 
             # Increment the learning-rate scheduler
@@ -534,6 +565,7 @@ def eval_loderunner_epoch(
         epochIDX (int): Index of current training epoch
         test_rcrd_filename (str): Name of CSV file to save testing sample stats to
         device (torch.device): device index to select
+        dataset (str): Name of the LodeRunner dataset/datastep family.
 
     """
     # Initialize things to save
@@ -550,7 +582,7 @@ def eval_loderunner_epoch(
 
     eval_fn = globals()[dataset_fns["eval"]]
 
-    with open(test_rcrd_filename, "a") as test_rcrd_file:
+    with open(test_rcrd_filename, "a") as test_rcrd_file, torch.inference_mode():
         for testbatch_ID, testdata in enumerate(testing_data):
             # Stop when number of training batches is reached
             if testbatch_ID >= num_test_batches:
@@ -563,7 +595,7 @@ def eval_loderunner_epoch(
                 loss_fn,
                 device,
                 channel_map,
-                )
+            )
 
             # Save testing record
             batch_records = np.column_stack(

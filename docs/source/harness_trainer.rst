@@ -96,6 +96,40 @@ See ``applications/harnesses/ch_ldrViT/train_ldrViT_ddp.py`` (and its two-frame
 sibling ``train_ldrViT_2frame.py``) for a complete migrated EMA + grad-clip
 example.
 
+Opt-in post-training evaluation
+-------------------------------
+
+Passing ``evaluate_after_training=True`` makes a **finished** study submit one
+separate test-set evaluation job for its final checkpoint (nothing is submitted
+for unfinished continuation cycles). The trainer routes this through
+:meth:`yoke.harnesses.base.HarnessStudy.run_evaluation`, the same render-and-
+submit path used by the manual ``yoke-evaluate-study`` CLI, so automatic and
+manual evaluation behave identically.
+
+``evaluate_checkpoint`` chooses which checkpoint that job targets:
+
+- ``"main"`` (default) — the ordinary ``.pth`` checkpoint just written.
+- ``"ema"`` — the class-aware EMA companion (``..._ema.pth``) written by
+  ``make_ema_hooks``. It loads exactly like the main checkpoint, and stem-based
+  artifact naming keeps its outputs distinct. Selecting ``"ema"`` when no
+  companion exists raises ``FileNotFoundError``.
+
+The harness must ship the optional evaluation files (``evaluation_input.tmpl``,
+the submission template, and the evaluator, listed in ``cp_files.txt``); see
+:doc:`evaluate_study` for the full workflow and the manual CLI.
+
+.. code-block:: python
+
+    HarnessTrainer(
+        args,
+        model_builder=build_from_checkpoint(LodeRunner, make_model_args),
+        dataset_builder=build_dataset,
+        epoch_fn=train_DDP_loderunner_epoch,
+        epoch_kwargs={"channel_map": list(range(len(CHANNEL_LIST))), "dataset": "pli"},
+        evaluate_after_training=True,   # opt in; default is False
+        evaluate_checkpoint="main",     # or "ema" for EMA-enabled harnesses
+    ).run()
+
 A thin harness script
 ----------------------
 

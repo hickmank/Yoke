@@ -1,0 +1,14 @@
+#!/bin/bash
+#SBATCH --job-name=ch_eval_s<studyIDX>_<STEM>
+#SBATCH --account=y26_artimis-fmod_g
+#SBATCH --partition=gpu
+#SBATCH --time=1:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --gpus-per-node=1
+#SBATCH --cpus-per-task=16
+#SBATCH --output=eval_study<studyIDX>_<STEM>.out
+#SBATCH --error=eval_study<studyIDX>_<STEM>.err
+
+source $HOME/yoke_260202/bin/activate
+python -u eval_LodeRunner.py @<INPUTFILE>

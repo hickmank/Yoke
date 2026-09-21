@@ -8,6 +8,7 @@ without GPUs or a real process group.
 """
 
 import argparse
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -92,7 +93,7 @@ def patched_ddp(monkeypatch: pytest.MonkeyPatch) -> dict:
 
     Returns a dict of recorders so tests can assert on saves/resubmissions.
     """
-    recorder: dict = {"saves": [], "submits": [], "continuations": []}
+    recorder: dict = {"saves": [], "submits": [], "continuations": [], "evaluations": []}
 
     monkeypatch.setattr(
         trainer_mod,
@@ -151,6 +152,39 @@ def patched_ddp(monkeypatch: pytest.MonkeyPatch) -> dict:
     monkeypatch.setattr(
         trainer_mod.HarnessStudy, "continuation_setup", staticmethod(_fake_continuation)
     )
+
+    # The trainer constructs a HarnessStudy and calls run_evaluation for the
+    # final checkpoint. Stub the constructor (avoid filesystem/template checks)
+    # and record run_evaluation invocations.
+    def _fake_init(
+        self: object,
+        rundir: str = "./runs",
+        template_dir: str = ".",
+        cp_file: str = "cp_files.txt",
+        submission_type: str = "slurm",
+        dryrun: bool = False,
+    ) -> None:
+        self.submission_type = submission_type.lower()
+        self.DRYRUN = dryrun
+
+    monkeypatch.setattr(trainer_mod.HarnessStudy, "__init__", _fake_init)
+
+    def _fake_run_evaluation(
+        self: object,
+        study_dir: str,
+        checkpointpath: str,
+        study: dict | None = None,
+    ) -> str:
+        recorder["evaluations"].append(
+            SimpleNamespace(
+                study_dir=study_dir,
+                checkpointpath=checkpointpath,
+                submission_type=self.submission_type,
+            )
+        )
+        return "study003_evaluation.slurm"
+
+    monkeypatch.setattr(trainer_mod.HarnessStudy, "run_evaluation", _fake_run_evaluation)
     monkeypatch.setattr(
         trainer_mod.os, "system", lambda cmd: recorder["submits"].append(cmd)
     )
@@ -337,6 +371,112 @@ def test_finalize_no_resubmit_when_finished(patched_ddp: dict) -> None:
 
     assert patched_ddp["continuations"] == []
     assert patched_ddp["submits"] == []
+
+
+def test_finalize_submits_evaluation_after_final_save(patched_ddp: dict) -> None:
+    """A finished opt-in trainer submits one evaluation after its checkpoint."""
+    trainer = HarnessTrainer(
+        _make_args(total_epochs=2, cycle_epochs=5),
+        model_builder=_fresh_model_builder,
+        dataset_builder=_dataset_builder,
+        epoch_fn=lambda **k: None,
+        evaluate_after_training=True,
+    )
+    trainer.setup_distributed()
+    trainer.setup()
+    trainer.train()
+    trainer.finalize()
+
+    assert len(patched_ddp["saves"]) == 1
+    assert len(patched_ddp["evaluations"]) == 1
+    evaluation = patched_ddp["evaluations"][0]
+    assert evaluation.checkpointpath == "./study003_modelState_epoch0002.pth"
+    assert evaluation.study_dir == "."
+    assert evaluation.submission_type == "slurm"
+    # Submission is routed through run_evaluation, not a bare os.system call
+    # in finalize; the continuation os.system path stays unused when finished.
+    assert patched_ddp["submits"] == []
+
+
+def test_finalize_evaluates_ema_companion_when_selected(
+    patched_ddp: dict,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """evaluate_checkpoint='ema' targets the _ema.pth companion checkpoint."""
+    monkeypatch.chdir(tmp_path)
+    # The EMA companion must exist on disk for selection to succeed.
+    (tmp_path / "study003_modelState_epoch0002_ema.pth").write_text("ema\n")
+
+    trainer = HarnessTrainer(
+        _make_args(total_epochs=2, cycle_epochs=5),
+        model_builder=_fresh_model_builder,
+        dataset_builder=_dataset_builder,
+        epoch_fn=lambda **k: None,
+        evaluate_after_training=True,
+        evaluate_checkpoint="ema",
+    )
+    trainer.setup_distributed()
+    trainer.setup()
+    trainer.train()
+    trainer.finalize()
+
+    assert len(patched_ddp["evaluations"]) == 1
+    evaluation = patched_ddp["evaluations"][0]
+    assert evaluation.checkpointpath == "./study003_modelState_epoch0002_ema.pth"
+
+
+def test_finalize_ema_selection_requires_companion(
+    patched_ddp: dict,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """evaluate_checkpoint='ema' raises when no EMA companion was written."""
+    monkeypatch.chdir(tmp_path)  # no _ema.pth companion present
+
+    trainer = HarnessTrainer(
+        _make_args(total_epochs=2, cycle_epochs=5),
+        model_builder=_fresh_model_builder,
+        dataset_builder=_dataset_builder,
+        epoch_fn=lambda **k: None,
+        evaluate_after_training=True,
+        evaluate_checkpoint="ema",
+    )
+    trainer.setup_distributed()
+    trainer.setup()
+    trainer.train()
+    with pytest.raises(FileNotFoundError, match="EMA companion"):
+        trainer.finalize()
+
+
+def test_trainer_rejects_unknown_evaluate_checkpoint() -> None:
+    """The constructor rejects an unsupported evaluate_checkpoint value."""
+    with pytest.raises(ValueError, match="Unknown evaluate_checkpoint"):
+        HarnessTrainer(
+            _make_args(),
+            model_builder=_fresh_model_builder,
+            dataset_builder=_dataset_builder,
+            epoch_fn=lambda **k: None,
+            evaluate_checkpoint="swa",
+        )
+
+
+def test_finalize_never_evaluates_unfinished_cycle(patched_ddp: dict) -> None:
+    """An unfinished cycle submits only its continuation."""
+    trainer = HarnessTrainer(
+        _make_args(total_epochs=10, cycle_epochs=2),
+        model_builder=_fresh_model_builder,
+        dataset_builder=_dataset_builder,
+        epoch_fn=lambda **k: None,
+        evaluate_after_training=True,
+    )
+    trainer.setup_distributed()
+    trainer.setup()
+    trainer.train()
+    trainer.finalize()
+
+    assert patched_ddp["evaluations"] == []
+    assert len(patched_ddp["continuations"]) == 1
 
 
 def test_finalize_respects_resubmit_flag(patched_ddp: dict) -> None:

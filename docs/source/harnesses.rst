@@ -23,11 +23,18 @@ A harness directory under ``applications/harnesses/<name>/`` contains:
     │   (or training_shell.tmpl) # complete shell submission script
     ├── cp_files.txt             # files copied into each study directory
     ├── <hyperparameters>.csv    # one row per study
-    └── README.md                # what the harness does and how to run it
+    ├── README.md                # what the harness does and how to run it
+    │
+    │   # optional post-training evaluation (see :doc:`evaluate_study`)
+    ├── evaluation_input.tmpl    # evaluation input-argument template
+    ├── evaluation_slurm.tmpl    # complete evaluation submission script
+    │   (or evaluation_shell.tmpl)
+    └── eval_<something>.py       # harness-local evaluator (in cp_files.txt)
 
 Note there is **no** ``START_study.py`` and **no** ``training_START.*`` files.
 A single input template and a single submission template generate both the
-first-launch and the epoch-continuation forms.
+first-launch and the epoch-continuation forms. The evaluation files are optional;
+a harness without them simply has no evaluation configured.
 
 Step-by-step
 ------------
@@ -142,6 +149,10 @@ the CSV:
   ``# <<optional:CONTINUATION>>`` block.
 - ``<CHECKPOINT>`` — the checkpoint to resume from; filled in per epoch by
   :meth:`yoke.harnesses.base.HarnessStudy.continuation_setup`.
+
+Evaluation templates additionally use ``<STEM>`` (the checkpoint filename stem)
+as a late-bound key for naming evaluation artifacts. See :doc:`evaluate_study`
+for the optional post-training evaluation workflow.
 
 The continuation lifecycle
 ---------------------------

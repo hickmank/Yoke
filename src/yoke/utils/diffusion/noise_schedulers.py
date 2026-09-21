@@ -18,6 +18,7 @@ The variance-preserving constraint is alpha(tau)^2 + sigma(tau)^2 = 1
 import math
 import torch
 
+
 class VPCosineNoiseSchedule:
     """Variance-preserving (VP) cosine noise schedule.
 
@@ -30,11 +31,11 @@ class VPCosineNoiseSchedule:
 
     def __init__(self) -> None:
         """Initialization for VP noise schedule."""
-        #I don't know if we need an init
+        # I don't know if we need an init
         pass
 
     def alpha(self, tau: torch.Tensor) -> torch.Tensor:
-        """Compute coefficient alpha(tau) = cos(pi*tau/2).
+        """Compute the coefficient cos(pi*tau/2).
 
         Args:
             tau: Diffusion time in [0, 1], shape (B,) or (B, 1).
@@ -45,7 +46,7 @@ class VPCosineNoiseSchedule:
         return torch.cos(math.pi * tau / 2.0)
 
     def sigma(self, tau: torch.Tensor) -> torch.Tensor:
-        """Compute coefficient sigma(tau) = sin(pi*tau/2).
+        """Compute the coefficient sin(pi*tau/2).
 
         Args:
             tau: Diffusion time in [0, 1], shape (B,) or (B, 1).

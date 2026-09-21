@@ -226,6 +226,7 @@ def test_load_hyperparameters_parses_rows_index_and_comments(
     assert isinstance(studies[0]["studyIDX"], int)
     assert studies[0]["init_learnrate"] == pytest.approx(0.001)
     assert studies[0]["batch_size"] == 8
+    assert isinstance(studies[0]["batch_size"], int)
     assert studies[1]["studyIDX"] == 2
     assert studies[1]["init_learnrate"] == pytest.approx(0.002)
     assert studies[1]["batch_size"] == 16
@@ -260,6 +261,18 @@ def _write_single_template_harness(harness_dir: Path, submission_type: str) -> N
         "#!/bin/bash\n"
         "#JOB study<studyIDX> epoch <epochIDX>\n"
         "python train.py @<INPUTFILE>\n"
+    )
+
+
+def _write_evaluation_templates(harness_dir: Path, submission_type: str) -> None:
+    """Add minimal evaluation templates to a test harness."""
+    config = HarnessStudy.EVALUATION_SYSTEMS[submission_type]
+    (harness_dir / "evaluation_input.tmpl").write_text(
+        "--checkpoint=<CHECKPOINT>\n"
+        "--output=testing_<studyIDX>_<STEM>_<init_learnrate>.csv\n"
+    )
+    (harness_dir / config["template"]).write_text(
+        "python eval.py @<INPUTFILE> stem=<STEM>\n"
     )
 
 
@@ -328,3 +341,191 @@ def test_generate_then_continuation_roundtrip(
     assert "0004" in restart_submit
     assert "<INPUTFILE>" not in restart_submit
     assert "<epochIDX>" not in restart_submit
+
+
+@pytest.mark.parametrize("submission_type", ["slurm", "shell"])
+def test_evaluation_templates_roundtrip(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    submission_type: str,
+) -> None:
+    """Evaluation templates retain late-bound values then render per checkpoint."""
+    harness_dir = tmp_path / "harness"
+    harness_dir.mkdir()
+    _write_single_template_harness(harness_dir, submission_type)
+    _write_evaluation_templates(harness_dir, submission_type)
+    monkeypatch.chdir(harness_dir)
+    harness = HarnessStudy(
+        rundir="./runs",
+        template_dir=".",
+        cp_file="cp_files.txt",
+        submission_type=submission_type,
+        dryrun=True,
+    )
+    harness.run_study(harness.load_hyperparameters("hyperparameters.csv")[0])
+    study_dir = harness_dir / "runs" / "study_001"
+    assert "<CHECKPOINT>" in (study_dir / "evaluation_input.tmpl").read_text()
+    assert "<STEM>" in (study_dir / "evaluation_input.tmpl").read_text()
+    monkeypatch.chdir(study_dir)
+    checkpoint = "study001_modelState_epoch0012.pth"
+    submission = HarnessStudy.evaluation_setup(checkpoint, 1, submission_type)
+    config = HarnessStudy.EVALUATION_SYSTEMS[submission_type]
+    stem = "study001_modelState_epoch0012"
+    assert submission == f"study001_evaluation_{stem}.{config['ext']}"
+    input_data = (study_dir / f"study001_evaluation_{stem}.input").read_text()
+    assert checkpoint in input_data
+    assert f"testing_001_{stem}_0.001.csv" in input_data
+    assert f"study001_evaluation_{stem}.input" in (study_dir / submission).read_text()
+
+
+def test_incomplete_evaluation_templates_raise(tmp_path: Path) -> None:
+    """An enabled but incomplete evaluation configuration fails during setup."""
+    (tmp_path / "evaluation_input.tmpl").write_text("--checkpoint=<CHECKPOINT>\n")
+    with pytest.raises(ValueError, match="Evaluation requires both"):
+        HarnessStudy(template_dir=str(tmp_path), rundir=str(tmp_path / "runs"))
+
+
+@pytest.mark.parametrize("submission_type", ["slurm", "shell"])
+def test_run_evaluation_uses_prepared_templates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    submission_type: str,
+) -> None:
+    """run_evaluation renders and submits using templates already in the study dir."""
+    harness_dir = tmp_path / "harness"
+    harness_dir.mkdir()
+    _write_single_template_harness(harness_dir, submission_type)
+    _write_evaluation_templates(harness_dir, submission_type)
+    monkeypatch.chdir(harness_dir)
+    harness = HarnessStudy(
+        rundir="./runs",
+        template_dir=".",
+        cp_file="cp_files.txt",
+        submission_type=submission_type,
+        dryrun=True,
+    )
+    harness.run_study(harness.load_hyperparameters("hyperparameters.csv")[0])
+
+    calls: list[str] = []
+    monkeypatch.setattr("os.system", lambda cmd: calls.append(cmd) or 0)
+
+    study_dir = harness_dir / "runs" / "study_001"
+    checkpoint = study_dir / "study001_modelState_epoch0100.pth"
+    checkpoint.write_text("weights\n")
+
+    # dryrun prints instead of submitting, so temporarily disable it to check
+    # the submit command path while still not touching a scheduler.
+    harness.DRYRUN = False
+    submission = harness.run_evaluation(str(study_dir), str(checkpoint))
+
+    stem = "study001_modelState_epoch0100"
+    config = HarnessStudy.EVALUATION_SYSTEMS[submission_type]
+    assert submission == f"study001_evaluation_{stem}.{config['ext']}"
+    # Rendered input contains the absolute checkpoint path.
+    input_data = (study_dir / f"study001_evaluation_{stem}.input").read_text()
+    assert str(checkpoint.resolve()) in input_data
+    # Submission runs from within the study dir with the eval submit command.
+    assert len(calls) == 1
+    assert config["submit"] in calls[0]
+    assert str(study_dir) in calls[0]
+    # The caller's working directory is left unchanged.
+    assert Path.cwd() == harness_dir
+
+
+def test_run_evaluation_renders_on_demand_for_old_study(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A study dir lacking eval templates gets them rendered from the harness CSV."""
+    harness_dir = tmp_path / "harness"
+    harness_dir.mkdir()
+    _write_single_template_harness(harness_dir, "slurm")
+    _write_evaluation_templates(harness_dir, "slurm")
+    monkeypatch.chdir(harness_dir)
+    harness = HarnessStudy(
+        rundir="./runs",
+        template_dir=".",
+        cp_file="cp_files.txt",
+        submission_type="slurm",
+        dryrun=True,
+    )
+
+    # Simulate an OLD study directory: exists, has a checkpoint, but no
+    # evaluation templates or evaluator copied in.
+    study_dir = harness_dir / "runs" / "study_001"
+    study_dir.mkdir(parents=True)
+    checkpoint = study_dir / "study001_modelState_epoch0050.pth"
+    checkpoint.write_text("weights\n")
+    assert not (study_dir / "evaluation_input.tmpl").exists()
+
+    study_row = harness.load_hyperparameters("hyperparameters.csv")[0]
+    submission = harness.run_evaluation(str(study_dir), str(checkpoint), study=study_row)
+
+    stem = "study001_modelState_epoch0050"
+    # Templates were rendered on demand (CSV key substituted, late-bound kept).
+    eval_tmpl = (study_dir / "evaluation_input.tmpl").read_text()
+    assert "<CHECKPOINT>" in eval_tmpl
+    assert "<STEM>" in eval_tmpl
+    # The evaluator listed in cp_files.txt was copied in.
+    assert (study_dir / "train.py").exists()
+    # Checkpoint-specific artifacts were written with CSV keys resolved.
+    input_data = (study_dir / f"study001_evaluation_{stem}.input").read_text()
+    assert f"testing_001_{stem}_0.001.csv" in input_data
+    assert submission == f"study001_evaluation_{stem}.slurm"
+
+
+def test_run_evaluation_distinguishes_ema_checkpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ordinary and EMA checkpoints produce distinct, non-colliding artifacts."""
+    harness_dir = tmp_path / "harness"
+    harness_dir.mkdir()
+    _write_single_template_harness(harness_dir, "slurm")
+    _write_evaluation_templates(harness_dir, "slurm")
+    monkeypatch.chdir(harness_dir)
+    harness = HarnessStudy(
+        rundir="./runs",
+        template_dir=".",
+        cp_file="cp_files.txt",
+        submission_type="slurm",
+        dryrun=True,
+    )
+    harness.run_study(harness.load_hyperparameters("hyperparameters.csv")[0])
+    study_dir = harness_dir / "runs" / "study_001"
+
+    ordinary = study_dir / "study001_modelState_epoch0100.pth"
+    ema = study_dir / "study001_modelState_epoch0100_ema.pth"
+    ordinary.write_text("w\n")
+    ema.write_text("w\n")
+
+    ordinary_submit = harness.run_evaluation(str(study_dir), str(ordinary))
+    ema_submit = harness.run_evaluation(str(study_dir), str(ema))
+
+    assert ordinary_submit != ema_submit
+    assert ordinary_submit == "study001_evaluation_study001_modelState_epoch0100.slurm"
+    assert ema_submit == "study001_evaluation_study001_modelState_epoch0100_ema.slurm"
+
+
+def test_run_evaluation_returns_none_when_not_configured(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """run_evaluation on a harness without eval templates returns None."""
+    harness_dir = tmp_path / "harness"
+    harness_dir.mkdir()
+    _write_single_template_harness(harness_dir, "slurm")  # no eval templates
+    monkeypatch.chdir(harness_dir)
+    harness = HarnessStudy(
+        rundir="./runs",
+        template_dir=".",
+        cp_file="cp_files.txt",
+        submission_type="slurm",
+        dryrun=True,
+    )
+    study_dir = harness_dir / "runs" / "study_001"
+    study_dir.mkdir(parents=True)
+    checkpoint = study_dir / "study001_modelState_epoch0001.pth"
+    checkpoint.write_text("w\n")
+
+    assert harness.run_evaluation(str(study_dir), str(checkpoint)) is None
