@@ -884,3 +884,165 @@ def eval_DDP_loderunner_datastep_cylex(
     torch.cuda.empty_cache()
 
     return end_img, pred_img, all_losses
+
+
+def _varchan_vars(channel_map: torch.Tensor, device: torch.device) -> torch.Tensor:
+    """Return the shared channel map of a variable-channel batch.
+
+    Samples from :mod:`yoke.datasets.pagosa_2frame` carry their own
+    ``channel_map``; after default collation it has shape ``(B, C)``. A batch
+    can only be run through the model with one channel set, so every row must
+    match (always true for batch size 1).
+
+    Args:
+        channel_map (torch.Tensor): Batched channel maps, shape ``(B, C)``.
+        device (torch.device): Device to move the result to.
+
+    Returns:
+        torch.Tensor: The ``(C,)`` channel indices used as ``in_vars`` and
+        ``out_vars``.
+
+    Raises:
+        ValueError: If the samples in the batch have different channel maps.
+    """
+    if not torch.equal(channel_map, channel_map[:1].expand_as(channel_map)):
+        raise ValueError(
+            "Samples in a variable-channel batch must share one channel_map; "
+            "use batch_size=1 or group samples by channel set."
+        )
+    return channel_map[0].to(device, non_blocking=True)
+
+
+def _gather_losses_and_ids(
+    per_sample_loss: torch.Tensor,
+    dataset_id: torch.Tensor,
+    rank: int,
+    world_size: int,
+) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+    """All-gather per-sample losses and their dataset tags across ranks.
+
+    Args:
+        per_sample_loss (torch.Tensor): ``(B,)`` losses on this rank.
+        dataset_id (torch.Tensor): ``(B,)`` dataset tags on this rank.
+        rank (int): Rank of this process.
+        world_size (int): Number of DDP processes.
+
+    Returns:
+        tuple: ``(all_losses, all_ids)`` concatenated in rank order on rank 0,
+        ``(None, None)`` elsewhere. Row ``i`` of each refers to the same sample.
+    """
+    per_sample_loss = per_sample_loss.detach()
+    dataset_id = dataset_id.to(per_sample_loss.device).long()
+
+    gathered_losses = [torch.zeros_like(per_sample_loss) for _ in range(world_size)]
+    gathered_ids = [torch.zeros_like(dataset_id) for _ in range(world_size)]
+    dist.all_gather(gathered_losses, per_sample_loss)
+    dist.all_gather(gathered_ids, dataset_id)
+
+    if rank == 0:
+        return torch.cat(gathered_losses, dim=0), torch.cat(gathered_ids, dim=0)
+    return None, None
+
+
+def train_DDP_loderunner_2frame_varchan_datastep(
+    data: tuple,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    loss_fn: torch.nn.Module,
+    device: torch.device,
+    rank: int,
+    world_size: int,
+    grad_clip: float | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+    """DDP training step for 2-frame data with per-sample channels.
+
+    Consumes batches from :mod:`yoke.datasets.pagosa_2frame` (directly or via
+    :class:`~yoke.datasets.mixed_dataset.MixedDataSet`). The channel map comes
+    from the batch rather than a fixed argument, and each per-sample loss is
+    returned with its dataset tag.
+
+    Args:
+        data (tuple): ``(input_frames, target_frame, lead_times, channel_map,
+            dataset_id)`` with shapes ``(B, 2, C, H, W)``, ``(B, C, H, W)``,
+            ``(B, 2)``, ``(B, C)`` and ``(B,)``.
+        model (torch.nn.Module): 2-frame model to train.
+        optimizer (torch.optim.Optimizer): Optimizer.
+        loss_fn (torch.nn.Module): Elementwise loss (``reduction="none"``).
+        device (torch.device): Device to run on.
+        rank (int): Rank of this process.
+        world_size (int): Number of DDP processes.
+        grad_clip (float | None): If not ``None``, clip the global gradient norm
+            to this value before the optimizer step.
+
+    Returns:
+        tuple: ``(end_img, pred_img, all_losses, all_ids)``; the last two are
+        gathered over ranks on rank 0 and ``None`` elsewhere.
+    """
+    model.train()
+
+    input_frames, end_img, lead_times, channel_map, dataset_id = data
+    input_frames = input_frames.to(device, non_blocking=True)
+    lead_times = lead_times.to(torch.float32).to(device, non_blocking=True)
+    end_img = end_img.to(device, non_blocking=True)
+    variables = _varchan_vars(channel_map, device)
+
+    pred_img = model(input_frames, variables, variables, lead_times)
+
+    loss = loss_fn(pred_img, end_img)
+    per_sample_loss = loss.mean(dim=[1, 2, 3])
+
+    optimizer.zero_grad(set_to_none=True)
+    loss.mean().backward()
+
+    if grad_clip is not None:
+        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+
+    optimizer.step()
+
+    all_losses, all_ids = _gather_losses_and_ids(
+        per_sample_loss, dataset_id, rank, world_size
+    )
+    return end_img, pred_img, all_losses, all_ids
+
+
+def eval_DDP_loderunner_2frame_varchan_datastep(
+    data: tuple,
+    model: torch.nn.Module,
+    loss_fn: torch.nn.Module,
+    device: torch.device,
+    rank: int,
+    world_size: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+    """DDP evaluation step for 2-frame data with per-sample channels.
+
+    Args:
+        data (tuple): Same 5-tuple as
+            :func:`train_DDP_loderunner_2frame_varchan_datastep`.
+        model (torch.nn.Module): 2-frame model to evaluate.
+        loss_fn (torch.nn.Module): Elementwise loss (``reduction="none"``).
+        device (torch.device): Device to run on.
+        rank (int): Rank of this process.
+        world_size (int): Number of DDP processes.
+
+    Returns:
+        tuple: ``(end_img, pred_img, all_losses, all_ids)``; the last two are
+        gathered over ranks on rank 0 and ``None`` elsewhere.
+    """
+    model.eval()
+
+    input_frames, end_img, lead_times, channel_map, dataset_id = data
+    input_frames = input_frames.to(device, non_blocking=True)
+    lead_times = lead_times.to(torch.float32).to(device, non_blocking=True)
+    end_img = end_img.to(device, non_blocking=True)
+    variables = _varchan_vars(channel_map, device)
+
+    with torch.no_grad():
+        pred_img = model(input_frames, variables, variables, lead_times)
+
+    loss = loss_fn(pred_img, end_img)
+    per_sample_loss = loss.mean(dim=[1, 2, 3])
+
+    all_losses, all_ids = _gather_losses_and_ids(
+        per_sample_loss, dataset_id, rank, world_size
+    )
+    return end_img, pred_img, all_losses, all_ids

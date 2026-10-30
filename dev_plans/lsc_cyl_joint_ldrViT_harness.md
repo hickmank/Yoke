@@ -59,7 +59,7 @@ Verified by loading the files directly:
   | `outside_air` |          | `Air`               |
   | `striker`     |          | `Al`                |
   | `throw`       |          | `Cu`                |
-  | `maincharge`  | `maincharge`, `booster` | `maincharge` (HE) |
+  | `maincharge`  | `maincharge`, `booster` | `HE`        |
   |               | `wall`   | design CSV `wallMat` (per simulation) |
   |               | back material | already named by material (`backMat`) |
 
@@ -80,10 +80,12 @@ Verified by loading the files directly:
 
 1. **Canonical vocabulary** (append-only, because a channel's index is its
    identity in checkpoints): `Uvelocity, Wvelocity`, then for each material in
-   `Air, Al, Be, Cu, U.DU, maincharge, N, Sn, Steel.alloySS304L,
+   `Air, Al, Be, Cu, U.DU, HE, N, Sn, Steel.alloySS304L,
    Polymer.Sylgard, Ta, Water`, the fields `density_`, `energy_`, `pressure_`.
-   That is 38 channels. **Void is excluded** (it has no mass or state) and
-   **booster is folded into maincharge**. `Rcoord`/`Zcoord` are dropped, since
+   That is 38 channels. **Void is excluded** (it has no mass or state). The
+   HE material is named **`HE`**; the `maincharge` and `booster` *parts* both
+   map to it (they may start in different initial states, which the per-cell
+   merge handles). `Rcoord`/`Zcoord` are dropped, since
    the ViT uses RoPE.
 2. **Merging two sources into one canonical material.** This happens for
    CYL booster+maincharge, and for `wall`+back when `wallMat == backMat`.
@@ -123,7 +125,7 @@ Verified by loading the files directly:
 ### `src/yoke/datasets/pagosa_fields.py` (new)
 - `CANONICAL_MATERIALS`, `CANONICAL_FIELDS`, and `canonical_index(name)`.
 - `LSC_PART_TO_MATERIAL`, and `CYL_FIXED_PART_TO_MATERIAL`
-  (`maincharge`/`booster` → `maincharge`).
+  (`maincharge`/`booster` → `HE`).
 - `DATASET_IDS` / `DATASET_NAMES`.
 - `resolve_sources(thermo_kinds, kinematic, part_map, available_keys)`
   returns `{canonical_name: [npz_part_field, ...]}` in vocabulary order. It
@@ -178,8 +180,10 @@ Verified by loading the files directly:
 - `load_record_csv` currently forces 3 column names, so a 4-column file would
   be misparsed. It will accept 3 or 4 columns, giving a `Dataset` column when
   present.
-- `yoke-plot-loss` (`cli/plot_loss.py`) gets an opt-in `--by_dataset` flag
-  that draws one band per dataset tag.
+- `yoke-plot-loss` (`cli/plot_loss.py`) gets an opt-in `--dataset <tag>`
+  filter that plots only that dataset's records (one figure per dataset).
+  *Changed during implementation* from the original `--by_dataset` overlay:
+  a filter reuses the existing plotting code unchanged.
 - The default output for existing 3-column records is unchanged.
 
 ### Harness `applications/harnesses/ch_ldrViT_lsc_cyl/` (new)
@@ -219,7 +223,7 @@ Verified by loading the files directly:
 6. CPU test: a tiny 2-frame `LodeRunnerViT` runs forward and backward with
    two different `in_vars` sets, and every parameter receives a gradient.
    This guards against DDP unused-parameter errors.
-7. `load_record_csv` 3/4-column support and `--by_dataset`, with tests.
+7. `load_record_csv` 3/4-column support and `--dataset`, with tests.
 8. Harness directory.
 9. Verify (below).
 

@@ -23,6 +23,8 @@ from yoke.utils.training.datastep.loderunner import (
     eval_DDP_loderunner_2frame_datastep,
     train_DDP_loderunner_2frame_lp_datastep,
     eval_DDP_loderunner_2frame_lp_datastep,
+    train_DDP_loderunner_2frame_varchan_datastep,
+    eval_DDP_loderunner_2frame_varchan_datastep,
 )
 from yoke.losses.lp_loss import LpLoss
 
@@ -584,3 +586,90 @@ def test_eval_DDP_loderunner_datastep_cylex(
         assert all_losses.shape == (world_size * B,)
     else:
         assert all_losses is None
+
+
+def _varchan_batch(
+    channel_map: torch.Tensor, ids: list[int]
+) -> tuple[torch.Tensor, ...]:
+    """Build a 5-tuple variable-channel batch of zeros."""
+    B, C = channel_map.shape
+    return (
+        torch.zeros((B, 2, C, 2, 2)),
+        torch.zeros((B, C, 2, 2)),
+        torch.ones((B, 2)),
+        channel_map,
+        torch.tensor(ids),
+    )
+
+
+class RecordingTwoFrameModel(DummyTwoFrameModel):
+    """DummyTwoFrameModel that records the variable indices it receives."""
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        in_vars: torch.Tensor,
+        out_vars: torch.Tensor,
+        lead_times: torch.Tensor,
+    ) -> torch.Tensor:
+        """Record ``in_vars``/``out_vars`` and defer to the parent.
+
+        Args:
+            x (torch.Tensor): Input of shape (B, 2, C, H, W).
+            in_vars (torch.Tensor): Input variable indices.
+            out_vars (torch.Tensor): Output variable indices.
+            lead_times (torch.Tensor): (B, 2) lead-times.
+
+        Returns:
+            torch.Tensor: Prediction of shape (B, C, H, W).
+        """
+        self.seen = (in_vars, out_vars)
+        return super().forward(x, in_vars, out_vars, lead_times)
+
+
+def test_train_varchan_datastep_uses_batch_channel_map(
+    device: torch.device, loss_fn: nn.Module
+) -> None:
+    """The batch's channel map drives in/out vars; ids are gathered by rank."""
+    model = RecordingTwoFrameModel()
+    optimizer = optim.SGD(model.parameters(), lr=0.1)
+    batch = _varchan_batch(torch.tensor([[3, 7, 9]]), [1])
+
+    end_img, pred_img, losses, ids = train_DDP_loderunner_2frame_varchan_datastep(
+        batch, model, optimizer, loss_fn, device, rank=0, world_size=2, grad_clip=0.5
+    )
+
+    assert torch.equal(model.seen[0], torch.tensor([3, 7, 9]))
+    assert torch.equal(model.seen[1], torch.tensor([3, 7, 9]))
+    assert pred_img.shape == end_img.shape == (1, 3, 2, 2)
+    assert torch.allclose(losses, torch.ones(2))  # (0 + 1 - 0)^2, two ranks
+    assert torch.equal(ids, torch.tensor([1, 1]))
+    assert model.param.item() != 1.0  # optimizer stepped
+
+
+def test_eval_varchan_datastep_nonzero_rank_returns_none(
+    device: torch.device, loss_fn: nn.Module
+) -> None:
+    """Non-zero ranks get no gathered losses or ids; params are untouched."""
+    model = DummyTwoFrameModel()
+    batch = _varchan_batch(torch.tensor([[0, 1], [0, 1]]), [0, 1])
+
+    end_img, pred_img, losses, ids = eval_DDP_loderunner_2frame_varchan_datastep(
+        batch, model, loss_fn, device, rank=1, world_size=2
+    )
+
+    assert losses is None and ids is None
+    assert pred_img.shape == (2, 2, 2, 2)
+    assert model.param.item() == 1.0
+
+
+def test_varchan_datastep_rejects_mixed_channel_maps(
+    device: torch.device, loss_fn: nn.Module
+) -> None:
+    """A batch whose samples have different channel maps raises."""
+    model = DummyTwoFrameModel()
+    batch = _varchan_batch(torch.tensor([[0, 1], [0, 2]]), [0, 1])
+    with pytest.raises(ValueError, match="share one channel_map"):
+        eval_DDP_loderunner_2frame_varchan_datastep(
+            batch, model, loss_fn, device, rank=0, world_size=1
+        )
