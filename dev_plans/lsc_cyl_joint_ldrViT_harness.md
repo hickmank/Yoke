@@ -15,6 +15,72 @@ differently. The plan adds:
 - lead times computed from each frame's **`sim_time`**;
 - a **dataset tag** attached to every per-sample loss record.
 
+## Amendment 1 (2026-10-30): train with the per-channel LpLoss, not MSE
+
+The first implementation followed `ch_ldrViT/train_ldrViT_2frame.py` and so
+trained with `HarnessTrainer`'s default `nn.MSELoss(reduction="none")`
+(`src/yoke/utils/builders.py:122`). MSE gives poor training results,
+especially for autoregressive rollouts, while the per-channel L2-norm loss
+largely fixes this even without normalization. The harness is therefore
+re-based on `ch_ldrViT/train_ldrViT_2frame_8ch_lp.py`.
+
+That script differs from `train_ldrViT_2frame.py` in exactly three ways. The
+joint harness takes on the first two (loss and datasteps) and deliberately
+**not** the third (channel set):
+
+1. **Loss**: `loss_builder=build_lp_loss`, i.e.
+   `LpLoss(d=2, p=2, method="abs", eps=1e-4, reduction="none")`, which
+   returns a `(B, C)` per-channel L2 norm over `(H, W)`.
+2. **Datasteps**: the `pli_2frame_lp` steps
+   (`datastep/loderunner.py:437-579`) backpropagate
+   `per_channel_loss.mean()` (mean over batch *and* channel) and record and
+   gather `per_channel_loss.mean(dim=1)` (one value per sample).
+3. **Channels**: an 8-channel target, the 6 material densities plus the 2
+   velocities, with no energy or pressure. **Not adopted**: per the user, the
+   joint harness keeps training on density, energy *and* pressure for each
+   material (closer to `train_ldrViT_2frame_20ch_lp_norm.py`'s channel set,
+   without the normalization).
+
+Changes (see the updated Design, Steps, and Verification sections):
+
+- **Varchan datasteps** (`train_/eval_DDP_loderunner_2frame_varchan_datastep`)
+  become LpLoss-only, using the same reduction as the `pli_2frame_lp` steps.
+  `loss_fn` must return `(B, C)`. Any other shape (for example an elementwise
+  MSE's `(B, C, H, W)`) raises a `ValueError`, so a mis-wired loss fails at the
+  first step instead of training silently on the wrong objective. Their
+  docstrings are updated to say so.
+- **Harness script** gains `build_lp_loss()` (copied from
+  `train_ldrViT_2frame_8ch_lp.py`) and `loss_builder=build_lp_loss`. Its
+  module docstring and `descr_str`/`prog` are updated to mention the LpLoss.
+- **Channel set unchanged**: `training_input.tmpl` keeps
+  `--thermo_kinds density energy pressure`. On LSC that is 20 channels
+  (6 materials × 3 kinds + 2 velocities); on CYL it is the 2 velocities plus
+  3 kinds per material present. The script's `--thermo_kinds` default changes
+  from `["density"]` to all three, so the default matches the intended study.
+  The LpLoss is per channel, so channels of very different scale (densities
+  vs. pressures/energies) are balanced without normalization.
+- **Loss-record scale**: records now hold the per-channel L2 norm averaged over
+  channels, the same quantity `8ch_lp` records. This is much larger than an
+  MSE value because the norm has no 1/M averaging. The README notes that
+  `yoke-plot-loss` needs a larger `--ylim` (its default is 1.0).
+- **Tests**:
+  - The varchan datastep tests switch to a real `LpLoss`. They check the
+    recorded per-sample value against `LpLoss(...).mean(dim=1)`, check that
+    the backward pass reduces with `mean()` (gradient equal to that of
+    `per_channel_loss.mean()`), and check that an elementwise loss raises.
+  - The multidataset epoch tests are unchanged, since they mock the
+    datasteps.
+- **Not changed**:
+  - `train_DDP_loderunner_multidataset_epoch` (the loss is just passed
+    through).
+  - The datasets.
+  - `MixedDataSet`.
+  - The plotting code.
+  - The existing `pli_2frame_lp` / `pli_2frame` datasteps.
+  - `HarnessTrainer`.
+  - `DATASTEP_FN` (the varchan steps are called directly by the epoch
+    function, not through the table).
+
 ## What the sample data shows (`data_subsamples/`)
 
 Verified by loading the files directly:
@@ -161,8 +227,11 @@ Verified by loading the files directly:
   `eval_DDP_loderunner_2frame_varchan_datastep`.
 - They unpack the 5-tuple and check that all rows of the batched
   `channel_map` match; row 0 is used as both `in_vars` and `out_vars`.
-- Forward pass, loss, grad clip, and optimizer step are as in the existing
-  2-frame steps.
+- Forward pass, grad clip, and optimizer step are as in the existing 2-frame
+  steps. **Loss (Amendment 1):** LpLoss-only, using the same reduction as the
+  `pli_2frame_lp` steps. `loss_fn` returns `(B, C)`; the backward pass uses
+  `.mean()` and the record uses `.mean(dim=1)`. Any other shape raises a
+  `ValueError`.
 - They `all_gather` both the per-sample losses and the per-sample
   `dataset_id`s, and return `(end_img, pred_img, all_losses, all_ids)`.
 
@@ -188,9 +257,12 @@ Verified by loading the files directly:
 
 ### Harness `applications/harnesses/ch_ldrViT_lsc_cyl/` (new)
 - `train_ldrViT_2frame_lsc_cyl.py` is a thin `HarnessTrainer` wrapper based on
-  `train_ldrViT_2frame.py`, with `default_vars=CANONICAL_FIELDS`,
-  `epoch_fn=train_DDP_loderunner_multidataset_epoch`, and an optional EMA
-  hook.
+  `train_ldrViT_2frame_8ch_lp.py` (Amendment 1), with
+  `default_vars=CANONICAL_FIELDS`,
+  `epoch_fn=train_DDP_loderunner_multidataset_epoch`,
+  `loss_builder=build_lp_loss`, and an optional EMA hook.
+  `training_input.tmpl` keeps `--thermo_kinds density energy pressure`, and
+  that becomes the script's default too.
 - Arguments: the standard `cli` groups, plus `--LSC_NPZ_DIR`, `--NPZ_DIR` and
   `--CSV_FILEPATH` for CYL (all existing `cli` args), and harness-local
   `--lsc_{train,validation}_filelist`, `--cyl_{train,validation}_filelist`,
@@ -226,17 +298,26 @@ Verified by loading the files directly:
 7. `load_record_csv` 3/4-column support and `--dataset`, with tests.
 8. Harness directory.
 9. Verify (below).
+10. **Amendment 1 (LpLoss):** make the varchan datasteps LpLoss-only and update
+    their tests; add `build_lp_loss` and `loss_builder` to the harness and
+    update its docstrings; change the `--thermo_kinds` default to all three
+    kinds (the template already passes all three); update the README (loss
+    description, ylim note); re-run verification.
 
 ## Verification
 
 - `./.venv/bin/python -m pytest -Werror` (full suite).
 - `./.venv/bin/ruff check` and `ruff format --check` on the touched files.
 - Manual (not committed) end-to-end data check: build the harness's
-  datasets against `data_subsamples/` (prefix files written to a temp dir), draw samples from
-  both through `MixedDataSet` and a `DataLoader(batch_size=1)`, and print the
+  datasets against `data_subsamples/` (prefix files written to a temp dir),
+  draw samples from both through `MixedDataSet` and a `DataLoader(batch_size=1)`, and print the
   channel names and lead times.
 - `yoke-start-study --dryrun` in the harness directory, to check that the
   templates render.
+- Amendment 1: re-run the manual `data_subsamples/` check with the harness's
+  `build_lp_loss()`. Run a forward pass, the loss, and a backward pass of a
+  tiny model on one real LSC sample and one real CYL sample. Check that the
+  loss is `(1, C)` and finite, and that every parameter receives a gradient.
 - **Not verifiable locally:** multi-GPU DDP, real training dynamics,
   throughput, and real `wallMat == backMat` NPZ files. Those need a cluster
   smoke run, which you would launch.

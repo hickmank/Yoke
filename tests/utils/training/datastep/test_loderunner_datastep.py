@@ -627,8 +627,14 @@ class RecordingTwoFrameModel(DummyTwoFrameModel):
         return super().forward(x, in_vars, out_vars, lead_times)
 
 
+@pytest.fixture
+def lp_loss() -> LpLoss:
+    """Return the per-channel LpLoss used by the varchan datasteps."""
+    return LpLoss(d=2, p=2, method="abs", eps=1e-4, reduction="none")
+
+
 def test_train_varchan_datastep_uses_batch_channel_map(
-    device: torch.device, loss_fn: nn.Module
+    device: torch.device, lp_loss: LpLoss
 ) -> None:
     """The batch's channel map drives in/out vars; ids are gathered by rank."""
     model = RecordingTwoFrameModel()
@@ -636,40 +642,99 @@ def test_train_varchan_datastep_uses_batch_channel_map(
     batch = _varchan_batch(torch.tensor([[3, 7, 9]]), [1])
 
     end_img, pred_img, losses, ids = train_DDP_loderunner_2frame_varchan_datastep(
-        batch, model, optimizer, loss_fn, device, rank=0, world_size=2, grad_clip=0.5
+        batch, model, optimizer, lp_loss, device, rank=0, world_size=2, grad_clip=5.0
     )
 
     assert torch.equal(model.seen[0], torch.tensor([3, 7, 9]))
     assert torch.equal(model.seen[1], torch.tensor([3, 7, 9]))
     assert pred_img.shape == end_img.shape == (1, 3, 2, 2)
-    assert torch.allclose(losses, torch.ones(2))  # (0 + 1 - 0)^2, two ranks
     assert torch.equal(ids, torch.tensor([1, 1]))
     assert model.param.item() != 1.0  # optimizer stepped
 
 
-def test_eval_varchan_datastep_nonzero_rank_returns_none(
-    device: torch.device, loss_fn: nn.Module
+def test_train_varchan_datastep_lp_reductions(
+    device: torch.device, lp_loss: LpLoss
 ) -> None:
-    """Non-zero ranks get no gathered losses or ids; params are untouched."""
+    """Records the channel-mean LpLoss and backprops its batch+channel mean.
+
+    The prediction is ``param`` everywhere (2x2 images, zero target), so each
+    ``(B, C)`` norm is ``n = sqrt(4 * param**2 + eps)`` and the gradient of the
+    batch-and-channel *mean* is ``4 * param / n``. A sum reduction would be
+    ``B * C`` times larger.
+    """
+    model = DummyTwoFrameModel()
+    optimizer = optim.SGD(model.parameters(), lr=0.1)
+    batch = _varchan_batch(torch.tensor([[0, 1, 2], [0, 1, 2]]), [0, 1])
+    norm = (4.0 + 1e-4) ** 0.5
+
+    _, _, losses, ids = train_DDP_loderunner_2frame_varchan_datastep(
+        batch, model, optimizer, lp_loss, device, rank=0, world_size=1
+    )
+
+    assert torch.allclose(losses, torch.full((2,), norm))
+    assert torch.equal(ids, torch.tensor([0, 1]))
+    assert model.param.item() == pytest.approx(1.0 - 0.1 * 4.0 / norm)
+
+
+def test_eval_varchan_datastep_records_channel_mean(
+    device: torch.device, lp_loss: LpLoss
+) -> None:
+    """Eval records the channel-mean LpLoss and leaves params untouched."""
+    model = DummyTwoFrameModel()
+    batch = _varchan_batch(torch.tensor([[0, 1], [0, 1]]), [0, 1])
+    batch[1][0, 1] = 1.0  # sample 0, channel 1 matches the prediction exactly
+
+    _, pred_img, losses, _ = eval_DDP_loderunner_2frame_varchan_datastep(
+        batch, model, lp_loss, device, rank=0, world_size=1
+    )
+
+    expected = lp_loss(pred_img, batch[1]).mean(dim=1)
+    assert torch.allclose(losses, expected)
+    assert losses[0] < losses[1]
+    assert model.param.item() == 1.0
+
+
+def test_eval_varchan_datastep_nonzero_rank_returns_none(
+    device: torch.device, lp_loss: LpLoss
+) -> None:
+    """Non-zero ranks get no gathered losses or ids."""
     model = DummyTwoFrameModel()
     batch = _varchan_batch(torch.tensor([[0, 1], [0, 1]]), [0, 1])
 
-    end_img, pred_img, losses, ids = eval_DDP_loderunner_2frame_varchan_datastep(
-        batch, model, loss_fn, device, rank=1, world_size=2
+    _, pred_img, losses, ids = eval_DDP_loderunner_2frame_varchan_datastep(
+        batch, model, lp_loss, device, rank=1, world_size=2
     )
 
     assert losses is None and ids is None
     assert pred_img.shape == (2, 2, 2, 2)
-    assert model.param.item() == 1.0
+
+
+@pytest.mark.parametrize("train", [True, False])
+def test_varchan_datastep_rejects_elementwise_loss(
+    device: torch.device, loss_fn: nn.Module, train: bool
+) -> None:
+    """An elementwise loss such as MSE(reduction="none") is rejected."""
+    model = DummyTwoFrameModel()
+    batch = _varchan_batch(torch.tensor([[0, 1]]), [0])
+    with pytest.raises(ValueError, match="per-channel loss"):
+        if train:
+            optimizer = optim.SGD(model.parameters(), lr=0.1)
+            train_DDP_loderunner_2frame_varchan_datastep(
+                batch, model, optimizer, loss_fn, device, rank=0, world_size=1
+            )
+        else:
+            eval_DDP_loderunner_2frame_varchan_datastep(
+                batch, model, loss_fn, device, rank=0, world_size=1
+            )
 
 
 def test_varchan_datastep_rejects_mixed_channel_maps(
-    device: torch.device, loss_fn: nn.Module
+    device: torch.device, lp_loss: LpLoss
 ) -> None:
     """A batch whose samples have different channel maps raises."""
     model = DummyTwoFrameModel()
     batch = _varchan_batch(torch.tensor([[0, 1], [0, 2]]), [0, 1])
     with pytest.raises(ValueError, match="share one channel_map"):
         eval_DDP_loderunner_2frame_varchan_datastep(
-            batch, model, loss_fn, device, rank=0, world_size=1
+            batch, model, lp_loss, device, rank=0, world_size=1
         )

@@ -913,6 +913,39 @@ def _varchan_vars(channel_map: torch.Tensor, device: torch.device) -> torch.Tens
     return channel_map[0].to(device, non_blocking=True)
 
 
+def _varchan_lp_loss(
+    loss_fn: torch.nn.Module, pred_img: torch.Tensor, end_img: torch.Tensor
+) -> torch.Tensor:
+    """Evaluate a per-channel ``LpLoss`` and check its ``(B, C)`` shape.
+
+    The variable-channel steps only support per-channel losses such as
+    :class:`yoke.losses.lp_loss.LpLoss` with ``reduction="none"``. An
+    elementwise loss (e.g. ``nn.MSELoss(reduction="none")``, which returns
+    ``(B, C, H, W)``) is rejected so a mis-wired harness fails immediately
+    instead of silently training on a different objective.
+
+    Args:
+        loss_fn (torch.nn.Module): Per-channel loss returning ``(B, C)``.
+        pred_img (torch.Tensor): Prediction of shape ``(B, C, H, W)``.
+        end_img (torch.Tensor): Target of shape ``(B, C, H, W)``.
+
+    Returns:
+        torch.Tensor: Per-``(B, C)`` loss.
+
+    Raises:
+        ValueError: If the loss is not shaped ``(B, C)``.
+    """
+    per_channel_loss = loss_fn(pred_img, end_img)
+    if per_channel_loss.shape != pred_img.shape[:2]:
+        raise ValueError(
+            "Variable-channel datasteps require a per-channel loss returning "
+            f"(B, C) = {tuple(pred_img.shape[:2])}, e.g. "
+            "LpLoss(reduction='none'); got shape "
+            f"{tuple(per_channel_loss.shape)}."
+        )
+    return per_channel_loss
+
+
 def _gather_losses_and_ids(
     per_sample_loss: torch.Tensor,
     dataset_id: torch.Tensor,
@@ -954,12 +987,17 @@ def train_DDP_loderunner_2frame_varchan_datastep(
     world_size: int,
     grad_clip: float | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
-    """DDP training step for 2-frame data with per-sample channels.
+    """DDP ``LpLoss`` training step for 2-frame data with per-sample channels.
 
     Consumes batches from :mod:`yoke.datasets.pagosa_2frame` (directly or via
     :class:`~yoke.datasets.mixed_dataset.MixedDataSet`). The channel map comes
     from the batch rather than a fixed argument, and each per-sample loss is
     returned with its dataset tag.
+
+    The loss handling matches :func:`train_DDP_loderunner_2frame_lp_datastep`:
+    ``loss_fn`` returns the per-``(B, C)`` L2 norm, the backward pass minimizes
+    its mean over batch *and* channel, and the recorded per-sample value is the
+    mean over channels.
 
     Args:
         data (tuple): ``(input_frames, target_frame, lead_times, channel_map,
@@ -967,7 +1005,8 @@ def train_DDP_loderunner_2frame_varchan_datastep(
             ``(B, 2)``, ``(B, C)`` and ``(B,)``.
         model (torch.nn.Module): 2-frame model to train.
         optimizer (torch.optim.Optimizer): Optimizer.
-        loss_fn (torch.nn.Module): Elementwise loss (``reduction="none"``).
+        loss_fn (torch.nn.Module): Per-channel loss returning ``(B, C)``,
+            e.g. ``LpLoss(reduction="none")``.
         device (torch.device): Device to run on.
         rank (int): Rank of this process.
         world_size (int): Number of DDP processes.
@@ -977,6 +1016,9 @@ def train_DDP_loderunner_2frame_varchan_datastep(
     Returns:
         tuple: ``(end_img, pred_img, all_losses, all_ids)``; the last two are
         gathered over ranks on rank 0 and ``None`` elsewhere.
+
+    Raises:
+        ValueError: If ``loss_fn`` does not return a ``(B, C)`` tensor.
     """
     model.train()
 
@@ -988,11 +1030,14 @@ def train_DDP_loderunner_2frame_varchan_datastep(
 
     pred_img = model(input_frames, variables, variables, lead_times)
 
-    loss = loss_fn(pred_img, end_img)
-    per_sample_loss = loss.mean(dim=[1, 2, 3])
+    # Per-(B, C) L2 norm from the LpLoss (reduction="none").
+    per_channel_loss = _varchan_lp_loss(loss_fn, pred_img, end_img)
+    # Per-sample loss for recording/gathering: mean over the channel axis.
+    per_sample_loss = per_channel_loss.mean(dim=1)
 
     optimizer.zero_grad(set_to_none=True)
-    loss.mean().backward()
+    # Backprop on the mean over batch and channel (reference convention).
+    per_channel_loss.mean().backward()
 
     if grad_clip is not None:
         torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
@@ -1013,13 +1058,19 @@ def eval_DDP_loderunner_2frame_varchan_datastep(
     rank: int,
     world_size: int,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
-    """DDP evaluation step for 2-frame data with per-sample channels.
+    """DDP ``LpLoss`` evaluation step for 2-frame data with per-sample channels.
+
+    Evaluation counterpart to
+    :func:`train_DDP_loderunner_2frame_varchan_datastep`; the recorded
+    per-sample value is the per-channel loss averaged over channels, as in
+    :func:`eval_DDP_loderunner_2frame_lp_datastep`.
 
     Args:
         data (tuple): Same 5-tuple as
             :func:`train_DDP_loderunner_2frame_varchan_datastep`.
         model (torch.nn.Module): 2-frame model to evaluate.
-        loss_fn (torch.nn.Module): Elementwise loss (``reduction="none"``).
+        loss_fn (torch.nn.Module): Per-channel loss returning ``(B, C)``,
+            e.g. ``LpLoss(reduction="none")``.
         device (torch.device): Device to run on.
         rank (int): Rank of this process.
         world_size (int): Number of DDP processes.
@@ -1027,6 +1078,9 @@ def eval_DDP_loderunner_2frame_varchan_datastep(
     Returns:
         tuple: ``(end_img, pred_img, all_losses, all_ids)``; the last two are
         gathered over ranks on rank 0 and ``None`` elsewhere.
+
+    Raises:
+        ValueError: If ``loss_fn`` does not return a ``(B, C)`` tensor.
     """
     model.eval()
 
@@ -1039,8 +1093,8 @@ def eval_DDP_loderunner_2frame_varchan_datastep(
     with torch.no_grad():
         pred_img = model(input_frames, variables, variables, lead_times)
 
-    loss = loss_fn(pred_img, end_img)
-    per_sample_loss = loss.mean(dim=[1, 2, 3])
+    per_channel_loss = _varchan_lp_loss(loss_fn, pred_img, end_img)
+    per_sample_loss = per_channel_loss.mean(dim=1)
 
     all_losses, all_ids = _gather_losses_and_ids(
         per_sample_loss, dataset_id, rank, world_size

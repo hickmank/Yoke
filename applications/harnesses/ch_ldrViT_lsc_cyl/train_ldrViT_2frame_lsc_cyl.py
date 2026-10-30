@@ -1,8 +1,15 @@
 """DDP harness training a 2-frame LodeRunner-ViT on LSC and CYL together.
 
 Thin wrapper around :class:`yoke.harnesses.trainer.HarnessTrainer`, structured
-like ``ch_ldrViT/train_ldrViT_2frame.py``. The difference is the data: samples
-come from :mod:`yoke.datasets.pagosa_2frame`, which maps both the LSC
+like ``ch_ldrViT/train_ldrViT_2frame_8ch_lp.py``: same backbone, optimizer,
+scheduler, grad clip, and EMA, and the same **per-channel** ``LpLoss``
+(:class:`yoke.losses.lp_loss.LpLoss`, ``d=2, p=2, method="abs", eps=1e-4``)
+in place of MSE. Unlike that script, density, energy and pressure are trained
+for every material (``--thermo_kinds``); the per-channel norm balances their
+very different scales.
+
+The difference is the data: samples come from
+:mod:`yoke.datasets.pagosa_2frame`, which maps both the LSC
 (``lsc240420``, part-named fields) and Cylex (``cx241203``, partly
 material-named fields) datasets onto the shared material vocabulary
 :data:`~yoke.datasets.pagosa_fields.CANONICAL_FIELDS`. The model's
@@ -12,6 +19,8 @@ map, so batches must use ``--batch_size 1``.
 ``--lsc_weight`` and ``--cyl_weight`` set the mixing proportions; a weight of
 ``0`` trains on the other dataset alone. Loss records gain a fourth column
 naming each sample's dataset (plot one with ``yoke-plot-loss --dataset lsc``).
+Recorded losses are per-channel L2 norms averaged over channels, as in
+``train_ldrViT_2frame_8ch_lp.py``.
 """
 
 import argparse
@@ -24,6 +33,7 @@ from yoke.datasets.pagosa_2frame import (
 from yoke.datasets.pagosa_fields import CANONICAL_FIELDS, THERMO_KINDS
 from yoke.harnesses.trainer import HarnessTrainer, TrainerHooks
 from yoke.helpers import cli
+from yoke.losses.lp_loss import LpLoss
 from yoke.lr_schedulers import CosineWithWarmupScheduler
 from yoke.models.vit.swin.bomberman import LodeRunnerViT
 from yoke.utils.builders import build_adamw, build_from_checkpoint
@@ -37,10 +47,11 @@ from yoke.utils.training.epoch.loderunner import (
 #############################################
 descr_str = (
     "Uses DDP to train a 2-frame LodeRunner-ViT on lsc240420 and cx241203 "
-    "simultaneously using material-based canonical channels."
+    "simultaneously using material-based canonical channels and a "
+    "per-channel LpLoss."
 )
 parser = argparse.ArgumentParser(
-    prog="DDP LodeRunner-ViT LSC+CYL Training",
+    prog="DDP LodeRunner-ViT LSC+CYL Training (LpLoss)",
     description=descr_str,
     fromfile_prefix_chars="@",
 )
@@ -100,7 +111,7 @@ parser.add_argument(
     type=str,
     nargs="+",
     choices=THERMO_KINDS,
-    default=["density"],
+    default=list(THERMO_KINDS),
     help="Per-material thermodynamic fields to train on.",
 )
 
@@ -208,6 +219,22 @@ def build_optimizer(model: object, args: argparse.Namespace) -> object:
         torch.optim.AdamW: The optimizer.
     """
     return build_adamw(model, args, lr=args.anchor_lr, weight_decay=0.01)
+
+
+def build_lp_loss() -> LpLoss:
+    """Build the per-channel ``LpLoss`` used by the varchan datasteps.
+
+    Identical to ``build_lp_loss`` in ``ch_ldrViT/train_ldrViT_2frame_8ch_lp.py``
+    (UMich WAMRViT PLI ViT finest loss): an absolute per-channel L2 norm over
+    the ``(H, W)`` axes with no averaging over field elements.
+    ``reduction="none"`` returns the per-``(B, C)`` norm so the datasteps
+    control the reduction (mean over batch and channel for backprop; mean over
+    channel for the recorded per-sample loss).
+
+    Returns:
+        LpLoss: The per-channel loss module.
+    """
+    return LpLoss(d=2, p=2, method="abs", eps=1e-4, reduction="none")
 
 
 def build_split(args: argparse.Namespace, split: str) -> MixedDataSet:
@@ -336,6 +363,7 @@ if __name__ == "__main__":
         epoch_fn=train_DDP_loderunner_multidataset_epoch,
         optimizer_builder=build_optimizer,
         scheduler_builder=build_scheduler,
+        loss_builder=build_lp_loss,
         epoch_kwargs=epoch_kwargs,
         hooks=hooks,
     ).run()

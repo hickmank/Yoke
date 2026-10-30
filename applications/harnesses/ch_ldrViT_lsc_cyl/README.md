@@ -21,6 +21,12 @@ onto one material-based vocabulary, `CANONICAL_FIELDS`, which is the model's
 |               | `wall`                    | design CSV `wallMat` |
 |               | back material             | design CSV `backMat` |
 
+Training uses the per-channel `LpLoss` (`d=2, p=2, method="abs",
+eps=1e-4`) and the LpLoss datastep convention of
+`ch_ldrViT/train_ldrViT_2frame_8ch_lp.py`: backprop on the mean over batch and
+channel, record the mean over channel. Density, energy and pressure are trained
+for every material present (`--thermo_kinds`), which is 20 channels on LSC.
+
 Each sample carries its own channel map (CYL material sets vary between
 simulations), so **the batch size is fixed at 1**. Lead times come from each
 frame's `sim_time`. When two parts share a material (booster + maincharge, or
@@ -51,8 +57,11 @@ Training and validation records have a fourth column naming the source dataset
 (`epoch, batch, loss, dataset`). Plot one dataset's curves with, for example:
 
 ```bash
-yoke-plot-loss --basedir ./runs --IDX 1 --dataset cyl
+yoke-plot-loss --basedir ./runs --IDX 1 --dataset cyl --ylim 50
 ```
+
+The recorded values are L2 norms (no averaging over pixels), so they are much
+larger than MSE values; raise `--ylim` (default `1.0`) to fit them.
 
 Launch
 ------
