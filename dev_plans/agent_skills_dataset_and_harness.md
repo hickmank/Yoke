@@ -534,3 +534,36 @@ Notes:
 None. Resolved: Codex/opencode symlinks deferred (Rev 3); machine profiles
 saved, with allocations treated as volatile (Rev 3); skills CI test added
 (Rev 4).
+
+## Implementation status (2026-11-10)
+
+Steps 1–8 are implemented. Step 9 (rehearsals in fresh agent sessions) is
+**not done yet**; it needs the user (and a cluster login node for
+`yoke-slurm-template`).
+
+Small additions beyond the plan:
+
+- `skills/yoke-slurm-template/machines/README.md` explains the folder. The
+  profile check skips it.
+- An extra CI check, `test_all_public_datasteps_listed`, fails if a public
+  datastep is added without a row in `batch_contracts.md`.
+- The path check also covers the root files `AGENTS.md` and `pyproject.toml`.
+- `slurm_template_skeleton.md` uses `@@NAME@@` for values the agent fills in,
+  to keep them apart from Yoke's `<KEY>` tokens. The SLURM skill checks that
+  none remain.
+
+Verified:
+
+- `pytest -Werror tests/skills`: 80 passed, 1 skipped (no machine profiles
+  exist yet).
+- Deliberately broken copies failed as expected, and the originals were
+  restored: a swapped tuple, a misspelled `yoke.` name, a missing path, and a
+  profile without its date or warning.
+- Full suite `pytest -Werror`: 794 passed, 1 skipped (before
+  `tests/skills/__init__.py` got its docstring; the skills tests were rerun
+  after).
+- `ruff check`, `ruff check --preview`, `ruff format --check` on
+  `tests/skills`: clean.
+- The harness skill's verification recipe (step 9.2–9.4) was run against
+  `ch_ldrViT_lsc_cyl` with `--dryrun` into a temp dir: it rendered, left no
+  tokens in the START files, and its parser accepted `study001_START.input`.

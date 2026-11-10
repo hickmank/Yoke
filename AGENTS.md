@@ -57,6 +57,7 @@ tests/                         # pytest; mirrors src layout (datasets/, models/,
 docs/                          # sphinx (source/, Makefile)
 docker/                        # Dockerfile for containerized builds
 dev_plans/                     # design/planning docs (markdown)
+skills/                        # agent skills (Section 6a); .claude/skills/ links here
 ```
 
 ---
@@ -265,6 +266,26 @@ Shared builder helpers live in `yoke.utils.builders` (`build_adamw`,
 - **Git:** only commit/push when explicitly asked. `main` is the stable comparison point.
 - **Data & external paths** are passed as CLI args (see `helpers/cli.py` `add_filepath_args`
   et al.); never hardcode dataset locations into the package.
+
+---
+
+## 6a. Agent skills
+
+`skills/` holds guided, interview-style procedures for adding training
+capability to Yoke. Each is a `SKILL.md` plus reference notes. Claude Code finds
+them through `.claude/skills/` symlinks. Any other agent can follow them by
+reading the `SKILL.md` directly. Start with `skills/README.md`.
+
+| Skill | Use it to |
+| --- | --- |
+| `skills/yoke-new-dataset/` | write a `Dataset` class (any file format) + tests |
+| `skills/yoke-new-training-step/` | add a datastep/epoch pair for a new batch contract |
+| `skills/yoke-slurm-template/` | write a SLURM template from read-only cluster queries |
+| `skills/yoke-new-harness/` | build an `applications/harnesses/` directory (orchestrates the others) |
+
+`skills/shared/batch_contracts.md` maps dataset return tuples to datasteps and
+epoch functions. `tests/skills/test_skill_files.py` keeps the skills in sync with
+the code, so update the skills when you rename or change code they mention.
 
 ---
 
