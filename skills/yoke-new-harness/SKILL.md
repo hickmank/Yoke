@@ -1,18 +1,23 @@
 ---
 name: yoke-new-harness
-description: Interview the user and create a new Yoke training harness under applications/harnesses/ (HarnessTrainer train script, training_input.tmpl, submission template, cp_files.txt, study CSV, README), checking the dataset's batch contract against the epoch function and verifying with yoke-start-study --dryrun. Orchestrates yoke-new-dataset, yoke-new-training-step, and yoke-slurm-template when needed. Use when the user wants to train a Yoke model on a dataset, or set up a new training study or harness.
+description: Interview the user and create a new Yoke training harness under applications/harnesses/ (HarnessTrainer train script, training_input.tmpl, submission template, cp_files.txt, study CSV, README), checking the dataset's batch contract against the epoch function and verifying with yoke-start-study --dryrun. Calls yoke-new-dataset, yoke-model, yoke-new-loss, yoke-new-training-step, and yoke-slurm-template when needed; for users new to Yoke, start with yoke-train-my-data instead. Use when the user wants to train a Yoke model on a dataset, or set up a new training study or harness.
 ---
 
 # Create a Yoke Training Harness
 
 You guide the user from "train model X on dataset Y" to a harness directory
-that `yoke-start-study` can launch. You also coordinate the other Yoke
-skills: a new dataset (`yoke-new-dataset`), a new training step
-(`yoke-new-training-step`), and a SLURM template (`yoke-slurm-template`).
-Run them when needed, then come back here.
+that `yoke-start-study` can launch. When a piece is missing, run the skill for
+it, then come back here: a dataset (`yoke-new-dataset`), a model
+(`yoke-model`), a loss (`yoke-new-loss`), a training step
+(`yoke-new-training-step`), or a SLURM template (`yoke-slurm-template`).
+
+If the user is new to Yoke and is starting from "I have data", use
+`yoke-train-my-data` instead. It frames the problem and calls this skill when
+the harness stage comes.
 
 **This skill never submits jobs or trains.** Verification stops at
-`yoke-start-study --dryrun` and argument parsing.
+`yoke-start-study --dryrun`, argument parsing, and (on sample data) the
+one-batch CPU `--preflight`.
 
 Read first:
 
@@ -23,7 +28,7 @@ Read first:
 
 Load when the procedure says to:
 
-- `skills/yoke-new-harness/reference/model_catalog.md`
+- `skills/yoke-model/reference/model_catalog.md`
 - `skills/shared/batch_contracts.md`
 - `skills/yoke-new-harness/reference/study_csv_and_templates.md`
 - `skills/shared/cards.md`
@@ -56,7 +61,9 @@ Load when the procedure says to:
 
 ### 3. Model (round 2)
 
-Use `model_catalog.md`:
+If there is a Model card, use it. Otherwise, for anything beyond picking an
+existing model with known settings, run `yoke-model`. For a quick choice,
+use `model_catalog.md`:
 
 - Which model. Check that it fits the data: input and output kinds, image
   size against patch and window constraints, `num_input_frames`, and
@@ -72,8 +79,9 @@ Use `model_catalog.md`:
   `batch_contracts.md` and name the epoch function it implies. If the tuple,
   the model call, or the loss shape do not fit any epoch function, **stop**
   and offer `yoke-new-training-step`. Resume with its Step card.
-- Loss (`default_mse_loss` vs. `LpLoss` vs. other) and whether it matches the
-  datastep's required loss shape.
+- Loss: from the Loss card, or choose one with `yoke-new-loss` (see
+  `skills/yoke-new-loss/reference/loss_catalog.md`). Its output shape must
+  match what the datastep requires.
 - Optimizer (AdamW defaults), LR scheduler (cosine with warmup, step, none),
   EMA, grad clip, and `epoch_kwargs` (`channel_map`, `dataset` tag, ...).
 - `--batch_size`, `--train_batches`, `--val_batches`, `--TRAIN_PER_VAL`,
@@ -161,10 +169,20 @@ touched:
    (or is intentionally unused), and every `<KEY>` in the templates is a CSV
    column or a late-bound token (`studyIDX`, `epochIDX`, `INPUTFILE`,
    `CHECKPOINT`, `STEM`).
-6. Check the model and contract with no data or GPU, if cheap: build the
-   model from `make_model_args(parsed_args)` on CPU and count its
-   parameters. Ask first if the model is large.
-7. Delete the temporary run directory afterwards (it holds only rendered
+6. Check the model size with no data: build the model from
+   `make_model_args(parsed_args)` on the CPU and count its parameters. Ask
+   first if the model is large.
+7. **Preflight** (if sample data is available on this machine, and the user
+   agrees): from the rendered study directory, with data paths pointing at
+   the samples (edit a copy of the START input in the temp dir, or pass
+   overriding flags after the `@`-file), run
+   `<python> <train_script> @study001_START.input --preflight`. It runs one
+   batch through the real dataset, model, loss, and epoch function on the CPU
+   and prints the batch shapes, parameter count, and loss. Interpret failures
+   with the table in `skills/yoke-launch-study/reference/launch_checks.md`
+   (check 4). The full preflight against the real data happens in
+   `yoke-launch-study` on the cluster.
+8. Delete the temporary run directory afterwards (it holds only rendered
    files).
 
 Report the actual results. Say what was **not** verified: data paths on the
@@ -181,4 +199,6 @@ yoke-start-study --csv <study.csv> --rundir ./runs --cpFile cp_files.txt \
     --submissionType <type>
 ```
 
-The user launches it. You do not.
+Don't launch it from this skill. Offer `yoke-launch-study` next, on the
+cluster. It checks the environment and data paths, runs the preflight on the
+real data, writes the Run card, and submits only if the user asks.

@@ -42,7 +42,7 @@ Round 1, data and model:
 
 - The batch tuple (from the Dataset card): names, shapes with `B`, dtypes.
 - The model and its exact forward call (see
-  `skills/yoke-new-harness/reference/model_catalog.md`). Which tuple elements
+  `skills/yoke-model/reference/model_catalog.md`). Which tuple elements
   feed it, and which are targets or metadata?
 - Fixed channels (`channel_map` argument) or per-batch channels?
 
@@ -113,4 +113,5 @@ Show it and **wait for approval**.
 ### 6. Hand off
 
 Write the **Step card** (`skills/shared/cards.md`) in the notes file, show
-it, and offer `yoke-new-harness`.
+it, and update the progress file if there is one. Then return to the
+calling skill, or offer `yoke-new-harness`.

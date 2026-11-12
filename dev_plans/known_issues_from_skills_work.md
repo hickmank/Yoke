@@ -1,8 +1,8 @@
 # Known Issues Found While Writing the Agent Skills
 
 Problems in existing Yoke code and docs, found on 2026-11-10 while building
-`skills/` (see `dev_plans/agent_skills_dataset_and_harness.md`). None has been
-fixed yet. Each was confirmed by reading the source; none was run. The skill
+`skills/` (see `dev_plans/agent_skills_dataset_and_harness.md`). Unless marked
+FIXED, they are still open. Each was confirmed by reading the source. The skill
 docs warn agents about issues 1–4, so update those notes when an issue is fixed.
 
 ## 1. Diffusion training steps hard-code channels 0–7
@@ -81,6 +81,26 @@ docs warn agents about issues 1–4, so update those notes when an issue is fixe
 
 - Most existing `AGENTS.md` lines exceed the 89-character limit used elsewhere
   in the repo. This is cosmetic. Reflow the file if anyone touches it broadly.
+
+## 7. Loss not moved to the training device — FIXED 2026-11-11
+
+- **Where:** `HarnessTrainer.setup()` in `src/yoke/harnesses/trainer.py`.
+- **What:** the loss from `loss_builder()` was never moved to the device, so
+  a loss with registered buffers (for example `MaskedLossMultiplicative`'s
+  `mask`) stayed on the CPU while the predictions were on the GPU.
+- **Fix:** `setup()` now calls `.to(self.device)` on `nn.Module` losses and
+  leaves plain callables as they are. Tests are in
+  `tests/harnesses/test_trainer_preflight.py`. Part of agent skills phase 2.
+
+## 8. `make_distributed_dataloader` crashed with `num_workers=0` — FIXED 2026-11-11
+
+- **Where:** `src/yoke/utils/dataload.py` (`make_distributed_dataloader`).
+- **What:** it always passed `prefetch_factor=2`, which `torch.utils.data.DataLoader`
+  rejects when `num_workers=0`. Any harness run with `--num_workers 0` failed
+  at dataloader construction.
+- **Fix:** pass `prefetch_factor=None` when `num_workers == 0`. Found while
+  adding preflight, which uses no workers. A test was added in
+  `tests/test_training_utils.py`.
 
 ## Decision recorded: optional reader dependencies
 

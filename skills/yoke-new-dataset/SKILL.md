@@ -67,7 +67,7 @@ Ask:
 - Time structure: no time, one step ahead, two input frames, a sequence. Is
   the lead time from a stored time field or from index spacing?
 - Which model family is intended (see
-  `skills/yoke-new-harness/reference/model_catalog.md`)?
+  `skills/yoke-model/reference/model_catalog.md`)?
 
 Then **propose a batch contract** from `batch_contracts.md`: the tuple, shapes,
 dtypes, and the epoch function it implies. Explain why it fits. If none fits:
@@ -144,5 +144,7 @@ Show the design to the user and **wait for approval**.
 
 - Write the **Dataset card** (`skills/shared/cards.md`) in the notes file and
   show it.
-- If the contract is `NEW`, offer `yoke-new-training-step`. Otherwise, offer
-  `yoke-new-harness` to build a training harness for this dataset.
+- If there is a progress file (`yoke-train-my-data`), update it and return
+  there. The next stages are usually `yoke-model` and `yoke-new-loss`.
+- Otherwise: if the contract is `NEW`, offer `yoke-new-training-step`. If not,
+  offer `yoke-model` (if the model isn't chosen yet) or `yoke-new-harness`.

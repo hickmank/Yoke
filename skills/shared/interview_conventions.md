@@ -1,8 +1,11 @@
 # Interview Conventions (all Yoke skills)
 
 Every Yoke skill is a guided conversation. The agent asks; the user decides.
-These rules apply to all four skills (`yoke-new-dataset`,
-`yoke-new-training-step`, `yoke-slurm-template`, `yoke-new-harness`).
+These rules apply to every skill in `skills/` (listed in `skills/README.md`).
+
+Most users of these skills do **not** know Yoke's internals. When a Yoke
+concept first comes up (batch contract, harness, study CSV, continuation,
+preflight), explain it in one or two plain sentences before asking about it.
 
 ## Before starting
 
@@ -24,6 +27,18 @@ These rules apply to all four skills (`yoke-new-dataset`,
 - Do not guess facts the user or the data can provide. Check the data or ask.
 - Summarize what you understood at the end of each round, in one or two
   sentences, so the user can correct it early.
+
+## Progress file (multi-skill work)
+
+When the work spans several skills (normally started by `yoke-train-my-data`),
+one **progress file**, `dev_plans/<project>_training.md`, ties it together.
+It holds a checklist of stages, each with its status and a link to that
+stage's design notes file, and all the cards (`skills/shared/cards.md`).
+
+- At the start of any skill, look for a progress file that mentions this
+  work. If there is one, read it and update it when the skill finishes:
+  mark the stage done, paste the card, and add a link to the notes file.
+- A later session resumes from the progress file, not from memory.
 
 ## Design notes file
 
@@ -50,8 +65,16 @@ These rules apply to all four skills (`yoke-new-dataset`,
   (`.npz`, `.pth`, `.h5`, anything under `runs/`).
 - Never add a dependency to `pyproject.toml`, or use a package that is not
   already installed, without approval.
-- Never submit jobs (`sbatch`, `salloc`, `srun`), start training, or launch
-  GPU work. These skills stop at rendering and unit tests.
+- **Never submit jobs** (`sbatch`, `salloc`, `srun`), start training, or
+  launch GPU work, and never cancel or modify a job (`scancel`, `scontrol
+  update`). Skills prepare the exact command for the user. **One exception:**
+  `yoke-launch-study` may run its `yoke-start-study` command for a **SLURM**
+  study, once, when the user explicitly asks at launch time. That is safe
+  because the jobs then live in the SLURM queue, independent of the agent's
+  shell. No other skill submits; `yoke-run-doctor` only proposes restart
+  commands. The one exception to "no compute" is the CPU **preflight**
+  (`--preflight`), a single forward pass that the user has approved for
+  that run.
 - Never write credentials, tokens, or secrets into any file.
 - Never run `git commit` or `git push`. Leave changes in the working tree.
 

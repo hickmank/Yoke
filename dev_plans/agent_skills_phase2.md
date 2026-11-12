@@ -12,6 +12,9 @@
   - A user-facing docs page, "Using Yoke with an AI agent", is in scope.
   - The config-driven-harness idea is written up separately in
     `dev_plans/config_driven_harness_idea.md`, for after this phase.
+- **Rev 3** (2026-11-11), after user review: `yoke-launch-study` may submit
+  the study for the user, if the user says so at launch time. See "Rev 3:
+  optional agent submission" below. Implemented 2026-11-11.
 
 ## Goal
 
@@ -43,7 +46,9 @@ Plus two code changes and one docs page:
 
 ## Design principles (decided with the user)
 
-- **The user submits; the agent never does.** Yoke runs are long and restart
+- **The user submits; the agent never does.** *(Superseded by Rev 3: the
+  launch skill may submit SLURM studies when the user explicitly asks. See
+  "Rev 3: optional agent submission".)* Yoke runs are long and restart
   themselves (`HarnessStudy.continuation_setup` resubmits from the compute
   node). If the agent submitted the job, the run would look tied to the
   agent's terminal session, but it isn't, and the user would lose track of
@@ -510,3 +515,130 @@ page are in scope.
 Making harnesses config-driven, so a new harness is mostly a config file:
 see `dev_plans/config_driven_harness_idea.md`. To start after this phase is
 done and tested.
+
+## Implementation status (2026-11-11)
+
+Steps 1–10 are implemented. Step 11 (rehearsals) is **not done**: it needs the
+user, a fresh session, and the HPC machine.
+
+Changes from the plan:
+
+- **Extra bug fix (known issue 8):** `make_distributed_dataloader` always
+  passed `prefetch_factor=2`, which `DataLoader` rejects when `num_workers=0`.
+  So preflight, or any `--num_workers 0` run, crashed. It now passes `None`
+  when there are no workers. Test in `tests/test_training_utils.py`.
+- `preflight()` returns its report dict (handy for tests) and raises
+  `RuntimeError` if no validation loss was recorded, not only on a non-finite
+  loss.
+- The DDP wrap passes `device_ids` only on CUDA, which is needed for CPU DDP.
+- `setup_single_process_cpu` asks the OS for a free port.
+- The loss device move is guarded with `isinstance(loss, nn.Module)`, as
+  planned.
+- `yoke-new-loss/SKILL.md` referenced a removed plan
+  (`lsc_cyl_joint_ldrViT_harness.md`); the skills CI path check caught it, and
+  the text now points to the harness script's docstring.
+- `skills/yoke-model/reference/model_catalog.md` was moved with `git mv`, so
+  the rename is **staged** in the index (not committed).
+
+Verified:
+
+- `pytest -Werror` full suite: 836 passed, 1 skipped.
+- New `tests/harnesses/test_trainer_preflight.py` (11 tests). These use a real
+  one-process `gloo` group, real DDP, real distributed dataloaders, and the real
+  `train_DDP_array_epoch` / `train_DDP_loderunner_epoch`. They cover a
+  contract-mismatch error, a NaN loss, no optimizer step, and the loss device
+  move.
+- `--preflight` on the real `ch_ldrViT_lsc_cyl` harness against
+  `data_subsamples/` (a small 0.9M-parameter configuration on CPU; the frame
+  draw was pinned to the sample frames that exist, through a wrapper script in a
+  temp dir). It passed: batch `(1, 2, 20, 1120, 400)`, loss 451.2, 2.5 s.
+- `pytest -Werror tests/skills`: 110 passed, 1 skipped. A deliberately broken
+  copy of a new skill file failed as expected (a misspelled `yoke.` name and a
+  missing symlink) and passed again after restoring it.
+- `ruff check`, `--preview`, and `format --check` are clean on all changed
+  Python files.
+
+Not verified:
+
+- **Sphinx build**: `sphinx` and `furo` are not installed in the local venv, so
+  the docs pages were not built here. `agent_skills.rst` parses cleanly with
+  docutils. CI's "Build documentation" step will build them.
+- Preflight at full model size (327M parameters for the smoke-CSV row) was not
+  run on this laptop.
+- `failure_signatures.md` is based on general experience. Refine it from real
+  failures on LANL machines.
+- All cluster behaviour.
+
+## Rev 3: optional agent submission (implemented 2026-11-11)
+
+### Change
+
+After the readiness checks and preflight, `yoke-launch-study` still prints
+the exact `yoke-start-study` command. It then **asks** whether the user wants
+the agent to run it. If the user says yes, the agent runs it. If not, the user
+runs it, as before.
+
+### Why this is safe for SLURM
+
+`yoke-start-study --submissionType slurm` runs `sbatch` once per CSV row
+(`HarnessStudy.submit_job`, `src/yoke/harnesses/base.py:305-320`) and returns.
+The jobs then live in the SLURM queue, and continuation resubmits from the
+compute nodes (`HarnessStudy.continuation_setup`). Nothing depends on the
+shell that ran `yoke-start-study`, so the session can end at once. The Rev 1
+rule ("the user always submits") was stricter than needed.
+
+### Limits
+
+- **SLURM only.** With `--submissionType shell`, `submit_job` runs the job
+  script with `source` (`base.py:63`, `:320`). The training then runs inside
+  the shell that called it: here, the agent's tool shell, which would block
+  and could be killed with the session. For shell studies the skill gives the
+  command only, and says why.
+- **Explicit consent at launch time**, for each submission. Approving the
+  design or the preflight is not consent to submit. The skill restates the
+  exact command, the CSV rows (study IDs), and the GPU-hour estimate, then
+  asks. Recommend the smoke CSV for the first submission.
+- **Submit only `yoke-start-study`.** The agent runs no other `sbatch`,
+  `salloc`, or `srun`, and never `scancel` or `scontrol update`. Other
+  skills keep the no-submit rule.
+- **Existing study directories.** Before submitting, check that
+  `runs/study_NNN/` does not already exist for the CSV's rows (relaunching
+  would overwrite rendered files and mix outputs). If any exist, stop and ask.
+- **After submitting:** capture the job IDs from `squeue -u $USER` (or
+  `sacct`) filtered by the job-name prefix, and fill in the Run card's
+  `submitted:` field (date, job IDs, who submitted). Show `squeue` output
+  once. Don't keep polling; point to `yoke-run-doctor` for later.
+
+### Files to change
+
+- `skills/yoke-launch-study/SKILL.md`: the description line; the intro (the
+  user may choose to have the agent submit); a new step 5b, "Offer to
+  submit", with the checks above; the Run card step records who submitted.
+- `skills/yoke-launch-study/reference/launch_checks.md`: add "7. Submitting"
+  (study-dir check, the command, capturing job IDs).
+- `skills/shared/interview_conventions.md`: the safety rule becomes "Never
+  submit, cancel, or modify jobs, **except** that `yoke-launch-study` may run
+  `yoke-start-study` for a SLURM study when the user explicitly asks at
+  launch time."
+- `skills/shared/cards.md`: Run card `submitted:` notes "by user / by agent
+  at user's request", with the job IDs.
+- `skills/README.md` (ground rules, flow diagram), `AGENTS.md` §6a,
+  `README.md` and `docs/source/agent_skills.rst` ("You submit the job" becomes
+  "you submit, or ask the agent to"), and `skills/yoke-train-my-data/SKILL.md`
+  step 5.
+- `skills/yoke-run-doctor/SKILL.md`: unchanged (still read-only; it proposes
+  restart commands for the user). See the open question.
+
+### Verification
+
+`pytest -Werror tests/skills` (frontmatter and paths). It is a docs-only
+change, so there is no new code test. A rehearsal on HPC: let the agent
+submit the smoke CSV, then end the session and check with `squeue` from a new
+shell that the jobs are still queued or running.
+
+### Decision: `yoke-run-doctor` stays propose-only
+
+Decided with the user (2026-11-11): `yoke-run-doctor` does **not** submit
+anything, including existing restart scripts. Resubmitting a broken chain is
+riskier, because it can duplicate a cycle or resume from the wrong checkpoint.
+Revisit after the HPC tests show how chains actually break.

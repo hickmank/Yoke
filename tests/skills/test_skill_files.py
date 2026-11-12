@@ -21,12 +21,18 @@ CLAUDE_SKILLS_DIR = REPO_ROOT / ".claude" / "skills"
 CONTRACTS_FILE = SKILLS_DIR / "shared" / "batch_contracts.md"
 MACHINES_DIR = SKILLS_DIR / "yoke-slurm-template" / "machines"
 
-# Skills the plan (dev_plans/agent_skills_dataset_and_harness.md) commits to.
+# Skills the plans (dev_plans/agent_skills_*.md) commit to.
 EXPECTED_SKILLS = {
     "yoke-new-dataset",
     "yoke-new-training-step",
     "yoke-slurm-template",
     "yoke-new-harness",
+    # Phase 2 (dev_plans/agent_skills_phase2.md).
+    "yoke-train-my-data",
+    "yoke-model",
+    "yoke-new-loss",
+    "yoke-launch-study",
+    "yoke-run-doctor",
 }
 
 # Inline code spans (`...`) are where skills name paths and Python objects.

@@ -246,6 +246,13 @@ checkpoints). The per-step EMA update and gradient clipping live in
 trainer threads it and the live `global_step` into each epoch call. See
 `applications/harnesses/ch_ldrViT/train_ldrViT_ddp.py` (and `train_ldrViT_2frame.py`).
 
+**Preflight.** Every `HarnessTrainer` script accepts `--preflight`
+(`python train_<name>.py @<input> --preflight`). It builds everything in a
+one-process CPU `gloo` group, runs one evaluation datastep through the real
+`epoch_fn` and `epoch_kwargs`, prints a report, and exits. There is no training,
+checkpointing, or resubmission (`HarnessTrainer.preflight`). The trainer also moves
+`nn.Module` losses to the training device.
+
 Shared builder helpers live in `yoke.utils.builders` (`build_adamw`,
 `move_optimizer_state_to_device`, `compute_last_epoch`, `default_mse_loss`,
 `checkpoint_name`, `build_from_checkpoint`).
@@ -278,10 +285,21 @@ reading the `SKILL.md` directly. Start with `skills/README.md`.
 
 | Skill | Use it to |
 | --- | --- |
+| `skills/yoke-train-my-data/` | **start here**: frame the problem and run the others in order |
 | `skills/yoke-new-dataset/` | write a `Dataset` class (any file format) + tests |
+| `skills/yoke-model/` | choose and size a model, or compose one from Yoke blocks |
+| `skills/yoke-new-loss/` | choose or write a loss with the right output shape |
 | `skills/yoke-new-training-step/` | add a datastep/epoch pair for a new batch contract |
+| `skills/yoke-new-harness/` | build an `applications/harnesses/` directory |
 | `skills/yoke-slurm-template/` | write a SLURM template from read-only cluster queries |
-| `skills/yoke-new-harness/` | build an `applications/harnesses/` directory (orchestrates the others) |
+| `skills/yoke-launch-study/` | run readiness checks and preflight; give the launch command |
+| `skills/yoke-run-doctor/` | diagnose a study the user already submitted |
+
+Agents never cancel or modify jobs. `yoke-launch-study` prints the launch command
+and, only if the user explicitly asks, runs it for a SLURM study. The jobs then
+live in the SLURM queue, not the agent's shell. Shell-type studies are never
+agent-submitted. `yoke-run-doctor` picks the run up later from the files on disk,
+and only proposes restart commands.
 
 `skills/shared/batch_contracts.md` maps dataset return tuples to datasteps and
 epoch functions. `tests/skills/test_skill_files.py` keeps the skills in sync with

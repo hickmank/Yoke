@@ -150,6 +150,34 @@ A thin harness script
 See ``applications/harnesses/se_DDP_loderunner/train_LodeRunner_ddp.py`` for a
 complete migrated example.
 
+Preflight: check the wiring before submitting
+---------------------------------------------
+
+Every harness built on ``HarnessTrainer`` accepts ``--preflight`` (declared by
+:func:`yoke.helpers.cli.add_training_args`). It runs the real train script on
+the CPU, with no GPU or SLURM allocation, and stops after one forward pass:
+
+.. code-block:: bash
+
+    cd runs/study_001        # a study rendered with yoke-start-study --dryrun
+    python train_<name>.py @study001_START.input --preflight
+
+:meth:`~yoke.harnesses.trainer.HarnessTrainer.preflight` builds the dataset,
+model, loss, and epoch function exactly as a real run would, in a one-process
+``gloo`` group
+(:func:`yoke.utils.parallel.setup_single_process_cpu`). It then calls the
+harness's ``epoch_fn`` once, with no training batches and one validation
+batch. That runs one evaluation datastep with the harness's ``epoch_kwargs``.
+The batch size is capped at 2, the dataloaders use no workers, and records go
+to a temporary directory. Nothing is trained, checkpointed, or resubmitted.
+
+It prints the model class, the parameter count, the batch's shapes and dtypes,
+and the recorded loss. It raises on any error, including a mismatch between the
+dataset's batch tuple and the datastep, and on a missing or non-finite loss.
+This catches most dataset, model, loss, and datastep mismatches before a job
+waits in the queue. A large model can be slow or memory-hungry on a CPU, so
+check its size first.
+
 Bespoke model builders: freezing and fine-tuning
 ------------------------------------------------
 
